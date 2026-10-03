@@ -23,14 +23,17 @@
     kindHeading,
     kindsFor,
     loadHome,
+    loadHomeRows,
     modelGate,
     otherKinds,
     partitionLine,
     partitionedByKind,
     searchPlaceholder,
+    shownIds,
     sortOffered,
     sortWaitingLine,
     strongEnd,
+    withRows,
     withoutChip
   } from '$lib/home.svelte.js';
   import {
@@ -316,16 +319,28 @@
     const seq = ++homeSeq;
     homeLoading = true;
     homeError = '';
+    const asked = [...kinds];
+    let res;
     try {
-      const res = await loadHome(kinds);
+      res = await loadHome(asked);
       if (seq !== homeSeq) return;
       home = res;
-      Object.assign(homeKept, { user: session.user?.id, epoch: modelGate.epoch, kinds: [...kinds], payload: res });
+      Object.assign(homeKept, { user: session.user?.id, epoch: modelGate.epoch, kinds: asked, payload: res });
     } catch (err) {
       if (seq === homeSeq) homeError = err.message;
+      return;
     } finally {
       if (seq === homeSeq) homeLoading = false;
     }
+    if (!res.more) return;
+    // A failed rest read keeps the head, silently (decision 563).
+    let rest = { shelves: [], suppressed: [] };
+    try {
+      rest = await loadHomeRows(asked, res.more.day, shownIds(res));
+    } catch {}
+    if (seq !== homeSeq) return;
+    home = withRows(res, rest);
+    homeKept.payload = home;
   }
 
   // Its own counter: `load()` bumps `requestSeq` alone, which must not discard the newest facets read.

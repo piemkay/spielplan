@@ -13,13 +13,20 @@ import { openTitle, placeThroughRate, setUpLadder, signedIn } from '../helpers.j
 /** Signed in inside its OWN context: a second tab shares the cookie jar (decision 117, per user). */
 const SECOND = { name: 'e2e-home-second', password: 'e2e-home-second-pw' };
 
-/** §6.0's shelf table, in its normative order (`home/shelves.py`'s `SHELF_IDS`). */
+/** §6.0's shelf families (decision 563); a family may hold several rows, each its own `key`. */
 const SHELF_IDS = [
   'because_anchor',
   'top_of_ledger',
+  'taste_term',
   'never_watched_term',
   'shared_sweet_spot',
+  'hidden_gems',
+  'acclaimed',
+  'partner_loved',
   'school_night',
+  'watch_again',
+  'rewatch_together',
+  'rewatch_term',
   'new_in_library',
   'worth_getting'
 ];
@@ -29,12 +36,25 @@ const GATED_KEYS = ['model', 'rail', 'suppressed', 'log', 'ledger', 'why_numbers
 
 const KINDS = ['movie', 'series'];
 
-/** §6.0's Home payload. Ask for the kinds the screen asked for: shelves partition per kind. */
+/** §6.0's Home payload, both reads merged as the screen merges them (decision 563). Ask for the
+ *  kinds the screen asked for: shelves partition per kind. */
 async function homePayload(request, kinds = KINDS) {
   const query = kinds.map((kind) => `kind=${kind}`).join('&');
   const res = await request.get(`/api/home?${query}`);
   expect(res.ok(), '§6.0 Home must answer for a signed-in user').toBeTruthy();
-  return res.json();
+  const head = await res.json();
+  if (!head.more) return head;
+  const shown = shelfCards(head).map((item) => `&shown=${item.title_id}`).join('');
+  const more = await request.get(`/api/home/rows?${query}&day=${head.more.day}${shown}`);
+  expect(more.ok(), "Home's lower rows must answer too").toBeTruthy();
+  const rest = await more.json();
+  return {
+    ...head,
+    shelves: [...head.shelves, ...rest.shelves],
+    shelves_total: head.shelves_total + rest.shelves.length,
+    ...(rest.suppressed ? { suppressed: [...(head.suppressed ?? []), ...rest.suppressed] } : {}),
+    more: null
+  };
 }
 
 /** Every card on every shelf; only a shelf's kind-scoped sections hold items (§4.1 rule 5). */

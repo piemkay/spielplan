@@ -22,11 +22,13 @@ import {
   plural,
   searchPlaceholder,
   shelfRows,
+  shownIds,
   sortOffered,
   sortWaitingLine,
   strongEnd,
   toPosterTitle,
   whyNumbersLine,
+  withRows,
   withoutChip
 } from './home.svelte.js';
 
@@ -203,6 +205,45 @@ describe('the kind partition (§4.1 rule 5, decision 18)', () => {
   });
 });
 
+describe('the two reads of Home (decision 563)', () => {
+  const shelf = (id, key, titleIds) => ({
+    id,
+    ...(key ? { key } : {}),
+    sections: [{ kind: 'movie', items: titleIds.map((title_id) => ({ title_id })) }]
+  });
+  const head = {
+    kinds: ['movie'],
+    shelves: [shelf('top_picks', 'top_picks', [1, 2]), shelf('because_anchor', 'because_anchor:0', [3])],
+    shelves_total: 2,
+    suppressed: [{ shelf: 'acclaimed', kind: 'movie' }],
+    more: { day: '2026-10-03' }
+  };
+
+  it('lists every card the head shows', () => {
+    expect(shownIds(head)).toEqual([1, 2, 3]);
+    expect(shownIds(null)).toEqual([]);
+  });
+
+  it('appends the rest below the head, counts it, and has no more to read', () => {
+    const rest = {
+      shelves: [shelf('because_anchor', 'because_anchor:1', [4])],
+      suppressed: [{ shelf: 'watch_again', kind: 'movie' }]
+    };
+    const merged = withRows(head, rest);
+    expect(merged.shelves.map((s) => s.key)).toEqual(['top_picks', 'because_anchor:0', 'because_anchor:1']);
+    expect(merged.shelves_total).toBe(3);
+    expect(merged.suppressed.map((s) => s.shelf)).toEqual(['acclaimed', 'watch_again']);
+    expect(merged.more).toBeNull();
+    expect(head.shelves, 'the head itself is untouched').toHaveLength(2);
+  });
+
+  it('keys each row by the shelf key, the family where there is none', () => {
+    const rows = shelfRows(withRows(head, { shelves: [shelf('worth_getting', null, [9])] }));
+    expect(rows.map((r) => r.key)).toEqual(['top_picks', 'because_anchor:0', 'worth_getting']);
+    expect(rows.map((r) => r.shelf)).toEqual(['top_picks', 'because_anchor', 'worth_getting']);
+  });
+});
+
 describe('the shelf card (proposal 29)', () => {
   it('renames the shelf payload into the shape the poster card reads', () => {
     const item = {
@@ -288,6 +329,7 @@ describe('the data voice (§6.8)', () => {
       'β 0.62 · β optimum 0.20 · gate k 10'
     );
     expect(whyNumbersLine({ min_cdf: 0.7, partner_user_id: 3 })).toBe('cdf floor 0.70');
+    expect(whyNumbersLine({ months: 18, min_votes: 200 })).toBe('months 18 · min votes 200');
     expect(whyNumbersLine(undefined)).toBe('');
   });
 });

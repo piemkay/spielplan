@@ -22,9 +22,10 @@
   let wishOpen = $state(false);
 </script>
 
-<!-- Once, after the last shelf: under Worth getting, which the table puts last (decision 544). -->
+<!-- Once, after the last shelf: under Worth getting, which the table puts last (decision 544), and
+     only once the lower rows have landed, so it never jumps. -->
 {#snippet wishRow()}
-  {#if wishRowShown(payload)}
+  {#if wishRowShown(payload) && !payload.more}
     <div class="notice-bar wishrow" data-testid="home-wish-row">
       <span class="dot" aria-hidden="true"><Icon name="bookmark" size={16} /></span>
       <div class="text">
@@ -64,7 +65,7 @@
       {#each regions as region (region.kind)}
         <section class="shelves" data-testid="kind-region" data-kind={region.kind}>
           <h2 class="list-header regionhead">{region.heading}</h2>
-          {#each region.rows as row, i (row.shelf + ':' + row.section.kind)}
+          {#each region.rows as row, i (row.key + ':' + row.section.kind)}
             <ShelfRow
               section={row.section}
               shelfId={row.shelf}
@@ -76,7 +77,7 @@
         </section>
       {/each}
     {:else}
-      {#each rows as row, i (row.shelf + ':' + row.section.kind)}
+      {#each rows as row, i (row.key + ':' + row.section.kind)}
         <ShelfRow section={row.section} shelfId={row.shelf} {onSelect} enter={mounted ? i : null} />
       {/each}
     {/if}
