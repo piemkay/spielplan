@@ -15,6 +15,7 @@ import asyncpg
 
 from spielplan.db import dna_terms
 from spielplan.db import genres as genre_vocab
+from spielplan.home import mix
 from spielplan.ledger.observations import LIVE_LABEL_SQL
 
 # `terms_for`'s default: a title's eight best-named terms.
@@ -133,6 +134,95 @@ async def carriers(
     return [int(r["title_id"]) for r in rows]
 
 
+async def liked_terms(
+    conn: asyncpg.Connection, *, user_id: int, kind: str, version: str, pool: int = 24
+) -> list[tuple[WhyTerm, float]]:
+    """The member's liked terms of a kind, strongest first, with their affinity (decision 514).
+
+    The affinity is the net share of liked over rated carriers, shrunk by two pseudo-ratings so
+    three for three does not outrank nine of ten; the HAVING is the sentence's own claim.
+    """
+    rows = await conn.fetch(
+        f"""
+        WITH lv AS ({LIVE_LABEL_SQL}),
+        rated AS (
+            SELECT lv.title_id, lv.value
+              FROM lv
+              JOIN title t ON t.id = lv.title_id AND t.kind = $2
+              JOIN user_title ut ON ut.title_id = lv.title_id AND ut.user_id = $1
+                                AND ut.state = 'seen'
+        )
+        SELECT d.term,
+               min(d.facet) AS facet,
+               CASE WHEN bool_or(d.tier = 'extracted') THEN 'extracted' ELSE 'projected' END AS tier,
+               (count(DISTINCT r.title_id) FILTER (WHERE r.value = 2)
+                - count(DISTINCT r.title_id) FILTER (WHERE r.value = 0))::float8
+                 / (count(DISTINCT r.title_id) + 2) AS aff,
+               max(dl.label) AS label
+          FROM rated r
+          JOIN dna_tagged d ON d.title_id = r.title_id AND d.version = $3
+          {LABEL_JOIN}
+         GROUP BY d.term
+        HAVING count(DISTINCT r.title_id) FILTER (WHERE r.value = 2) >= $5
+           AND 2 * count(DISTINCT r.title_id) FILTER (WHERE r.value = 2) > count(DISTINCT r.title_id)
+         ORDER BY aff DESC, d.term
+         LIMIT $4
+        """,
+        user_id,
+        kind,
+        version,
+        pool,
+        LIKED_TERM_MIN,
+    )
+    return [
+        (WhyTerm(term=r["term"], facet=r["facet"], tier=r["tier"], label=r["label"]), float(r["aff"]))
+        for r in rows
+    ]
+
+
+def group_of(facet: str) -> str:
+    """Decision 560's group of a facet; a facet in no group (register) is its own."""
+    return _GROUP_OF.get(facet, facet)
+
+
+_GROUP_OF = {facet: group for group, facets in mix.GROUPS.items() for facet in facets}
+
+
+def taste_pair(
+    liked: Sequence[tuple[WhyTerm, float]],
+    carried: dict[str, set[int]],
+    pool: dict[str, set[int]],
+    *,
+    leads: Sequence[str],
+    taken: set[str],
+    liked_min: int,
+    floor: int,
+) -> tuple[WhyTerm, WhyTerm, set[int]] | None:
+    """Two liked terms from different groups, the first from `leads` in order, the second the one
+    whose shared `pool` carriers times affinity is largest; both carried by `liked_min` titles of
+    `carried` and `floor` of `pool`. No term in `taken`."""
+    by_term = {t.term: (t, aff) for t, aff in liked}
+    for lead in leads:
+        if lead in taken:
+            continue
+        first = by_term[lead][0]
+        best: tuple[tuple[float, str], WhyTerm, set[int]] | None = None
+        for second, aff in liked:
+            if second.term in taken or group_of(second.facet) == group_of(first.facet):
+                continue
+            if len(carried.get(lead, set()) & carried.get(second.term, set())) < liked_min:
+                continue
+            shared = pool.get(lead, set()) & pool.get(second.term, set())
+            if len(shared) < floor:
+                continue
+            key = (-len(shared) * aff, second.term)
+            if best is None or key < best[0]:
+                best = (key, second, shared)
+        if best is not None:
+            return first, best[1], best[2]
+    return None
+
+
 async def frontier_term(
     conn: asyncpg.Connection,
     *,
@@ -143,6 +233,7 @@ async def frontier_term(
     carrier_floor: int,
     liked_pool: int = 24,
     exclude: Sequence[int] = (),
+    liked: Sequence[tuple[WhyTerm, float]] | None = None,
 ) -> tuple[WhyTerm, WhyTerm, float, float] | None:
     """§6.4's explore frontier: (candidate, neighbour, cosine, affinity), or None.
 
@@ -199,40 +290,8 @@ async def frontier_term(
     if not candidates:
         return None
 
-    # The affinity is the net share of liked over rated carriers, shrunk by two pseudo-ratings so
-    # three for three does not outrank nine of ten; the HAVING is the sentence's own claim.
-    liked = await conn.fetch(
-        f"""
-        WITH lv AS ({LIVE_LABEL_SQL}),
-        rated AS (
-            SELECT lv.title_id, lv.value
-              FROM lv
-              JOIN title t ON t.id = lv.title_id AND t.kind = $2
-              JOIN user_title ut ON ut.title_id = lv.title_id AND ut.user_id = $1
-                                AND ut.state = 'seen'
-        )
-        SELECT d.term,
-               min(d.facet) AS facet,
-               CASE WHEN bool_or(d.tier = 'extracted') THEN 'extracted' ELSE 'projected' END AS tier,
-               (count(DISTINCT r.title_id) FILTER (WHERE r.value = 2)
-                - count(DISTINCT r.title_id) FILTER (WHERE r.value = 0))::float8
-                 / (count(DISTINCT r.title_id) + 2) AS aff,
-               max(dl.label) AS label
-          FROM rated r
-          JOIN dna_tagged d ON d.title_id = r.title_id AND d.version = $3
-          {LABEL_JOIN}
-         GROUP BY d.term
-        HAVING count(DISTINCT r.title_id) FILTER (WHERE r.value = 2) >= $5
-           AND 2 * count(DISTINCT r.title_id) FILTER (WHERE r.value = 2) > count(DISTINCT r.title_id)
-         ORDER BY aff DESC, d.term
-         LIMIT $4
-        """,
-        user_id,
-        kind,
-        version,
-        liked_pool,
-        LIKED_TERM_MIN,
-    )
+    if liked is None:
+        liked = await liked_terms(conn, user_id=user_id, kind=kind, version=version, pool=liked_pool)
     if not liked:
         return None
 
@@ -256,19 +315,19 @@ async def frontier_term(
         version,
         kind,
         [r["term"] for r in candidates],
-        [r["term"] for r in liked],
+        [t.term for t, _aff in liked],
     )
     if not pairs:
         return None
 
     cand_by_term = {r["term"]: r for r in candidates}
-    liked_by_term = {r["term"]: r for r in liked}
+    liked_by_term = {t.term: (t, aff) for t, aff in liked}
     scored = []
     for row in pairs:
-        if cand_by_term[row["cand"]]["facet"] == liked_by_term[row["neighbour"]]["facet"]:
+        if cand_by_term[row["cand"]]["facet"] == liked_by_term[row["neighbour"]][0].facet:
             continue    # the same thing under a narrower or broader name (decision 514)
         cos = float(row["shared"]) / ((float(row["cand_n"]) * float(row["neighbour_n"])) ** 0.5)
-        aff = float(liked_by_term[row["neighbour"]]["aff"])
+        aff = liked_by_term[row["neighbour"]][1]
         # Ties: the larger candidate pool first, then the terms ascending.
         scored.append((-(cos * aff), -int(cand_by_term[row["cand"]]["n"]), row["cand"],
                        row["neighbour"], row, cos, aff))
@@ -276,12 +335,11 @@ async def frontier_term(
         return None
     scored.sort(key=lambda s: s[:4])
     _neg, _n, _term, _near, row, cos, aff = scored[0]
-    c, ln = cand_by_term[row["cand"]], liked_by_term[row["neighbour"]]
+    c = cand_by_term[row["cand"]]
     return (
         WhyTerm(term=c["term"], facet=c["facet"], tier=c["tier"], role="member",
                 label=c["label"]),
-        WhyTerm(term=ln["term"], facet=ln["facet"], tier=ln["tier"], role="anchor_side",
-                label=ln["label"]),
+        liked_by_term[row["neighbour"]][0].with_role("anchor_side"),
         cos,
         aff,
     )

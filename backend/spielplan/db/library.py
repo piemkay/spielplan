@@ -618,6 +618,24 @@ _PLATFORM_SCORE = f"""
      GROUP BY title_id
 """
 
+async def acclaimed(conn: asyncpg.Connection, *, kind: str, share: float, min_votes: int) -> list[int]:
+    """The owned titles of `kind` in the top `share` by platform score among those at `min_votes`
+    votes or more, highest first. Rule 3: this orders a row and feeds no model."""
+    rows = await conn.fetch(
+        f"""
+        WITH s AS ({_PLATFORM_SCORE}),
+        ranked AS (
+            SELECT t.id, s.score, cume_dist() OVER (ORDER BY s.score DESC) AS q
+              FROM title t JOIN s ON s.title_id = t.id
+             WHERE t.kind = $1 AND t.is_owned AND s.votes >= $2
+        )
+        SELECT id FROM ranked WHERE q <= $3 ORDER BY score DESC, id
+        """,
+        kind, min_votes, share,
+    )
+    return [int(r["id"]) for r in rows]
+
+
 # Decision 556: a film is widely seen at this many votes, and every fourth slot of a page is one.
 WIDELY_SEEN_VOTES = 100_000
 CROWD_EVERY = 4

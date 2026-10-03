@@ -1,4 +1,4 @@
-"""§6.0's Home: the pending-verdicts banner and the seven shelves.
+"""§6.0's Home: the pending-verdicts banner and up to fifteen shelves a kind (decisions 562, 563).
 
 A shelf has no items, only one `section` per kind, so an interleaved ranking is unrepresentable
 (§4.1 rule 5, decision 18). A shelf that names terms selects its cards BY them (`why.py`).
@@ -6,15 +6,17 @@ A shelf has no items, only one `section` per kind, so an interleaved ranking is 
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from statistics import NormalDist, fmean
 from typing import Any
 
 import asyncpg
 
 from spielplan.db import library
-from spielplan.home import notices, suggest, taste, wish
+from spielplan.home import mix, notices, suggest, taste, wish
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
 from spielplan.ledger import ladder
@@ -64,16 +66,20 @@ WORTH_GETTING_POOL = 4
 # See all's whole list, longer than a shelf.
 WORTH_GETTING_LIST_CAP = 60
 
-# §6.0's shelf order, verbatim from the (normative) table.
-SHELF_IDS: tuple[str, ...] = (
-    "because_anchor",
-    "top_of_ledger",
-    "never_watched_term",
-    "shared_sweet_spot",
-    "school_night",
-    "new_in_library",
-    "worth_getting",
-)
+# Decision 563: rows a kind, the first read's slots, and each family's rows and limits.
+ROW_CAP = 15
+HEAD_SLOTS = 5
+BECAUSE_ROWS = 4
+BECAUSE_TRIES = 2
+TASTE_ROWS = 3
+TASTE_LEADS = 12
+TASTE_LIKED_MIN = 2
+GEM_SHARE = 1 / 3
+GEM_MIN_CDF = 0.5
+ACCLAIMED_SHARE = 0.2
+# Decision 562: a real play holds a title out of the rewatch rows this long.
+REWATCH_MONTHS = 12
+_LONG_AGO = datetime.min.replace(tzinfo=UTC)
 
 
 # --- payload types ------------------------------------------------------------------------------
@@ -125,12 +131,16 @@ class Shelf:
 
     id: str
     ranking: bool
+    key: str = ""
+    seen_only: bool = False
     sections: list[Section] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "key": self.key,
             "ranking": self.ranking,
+            "seen_only": self.seen_only,
             "sections": [s.as_dict() for s in self.sections],
         }
 
@@ -150,6 +160,12 @@ class Ctx:
     # Per kind; absent means no `ledger_cutpoints` row and no fold-in yet.
     tier_sets: dict[str, tuple[str, ...]] = field(default_factory=dict)
     betas: dict[str, float] = field(default_factory=dict)
+    day: str = ""
+    nth: int = 0
+    partner: dict[str, Any] | None = None
+    avoid: taste.Avoided | None = None
+    # Reads every row of a request shares, made once: rated pools, liked terms, named terms.
+    memo: dict[Any, Any] = field(default_factory=dict, compare=False)
 
     @property
     def excluded(self) -> frozenset[int]:
@@ -345,60 +361,131 @@ def _board_level(row: asyncpg.Record, k: int) -> int | None:
     return None if row["model_tier"] is None else int(row["model_tier"])
 
 
-# --- shelf 1: because_anchor ------------------------------------------------------------------
+# --- because_anchor -------------------------------------------------------------------------
+
+
+def _daily(user_id: int, day: str, key: str) -> int:
+    """The day's order (decision 563): the same member on the same day reads the same Home."""
+    return int.from_bytes(hashlib.sha256(f"{user_id}:{day}:{key}".encode()).digest()[:8], "big")
+
+
+async def _cards(
+    conn: asyncpg.Connection,
+    ctx: Ctx,
+    kind: str,
+    ids: Sequence[int],
+    *,
+    seen: bool = False,
+    order: Sequence[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Cards for the owned `ids` the member has (not) seen: by their score, or in `order`."""
+    rows = await conn.fetch(
+        CARD_SELECT + CARD_FROM + """
+         WHERE t.kind = $2 AND t.id = ANY($4::int[]) AND t.is_owned
+           AND (COALESCE(ut.state, 'unseen') = 'seen') = $5
+         ORDER BY us.score DESC NULLS LAST, t.year DESC NULLS LAST, t.id
+        """,
+        ctx.user_id, kind, ctx.bundle_version, list(ids), seen,
+    )
+    if order is not None:
+        by_id = {int(r["title_id"]): r for r in rows}
+        rows = [by_id[i] for i in order if i in by_id]
+    tier_set, beta = ctx.tier_set(kind), ctx.beta(kind)
+    return [_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows[:SHELF_CAP])]
+
+
+async def _rated_seen(
+    conn: asyncpg.Connection, ctx: Ctx, kind: str, user_id: int
+) -> list[dict[str, Any]]:
+    """A member's seen and rated titles of a kind (neither implies the other) at the level their board
+    shows, `loved` at its top two steps, `long_ago` with no real play in REWATCH_MONTHS."""
+    key = ("rated", user_id, kind)
+    if key not in ctx.memo:
+        tier_set = (
+            ctx.tier_set(kind) if user_id == ctx.user_id
+            else await tier_set_of(conn, user_id=user_id, kind=kind)
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT t.id, t.name, t.is_owned, ls.tier AS model_tier, ut.played_at,
+                   te.tier AS assigned, te.n_levels AS assigned_k, lv.value AS verdict,
+                   (ut.played_at IS NULL OR ut.played_at < now() - make_interval(months => $3))
+                       AS long_ago
+              FROM ledger_state ls
+              JOIN title t ON t.id = ls.title_id
+              JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id
+                                AND ut.state = 'seen'
+              LEFT JOIN ({latest_tier_edit_sql()}) te ON te.title_id = ls.title_id
+              LEFT JOIN ({LIVE_LABEL_SQL}) lv ON lv.title_id = ls.title_id
+             WHERE ls.user_id = $1 AND t.kind = $2 AND ls.tier IS NOT NULL AND ls.observed
+            """,
+            user_id,
+            kind,
+            REWATCH_MONTHS,
+        )
+        k = len(tier_set)
+        ctx.memo[key] = [
+            {**dict(r), "level": level, "loved": level >= k - 2}
+            for r in rows
+            for level in [_board_level(r, k)]
+        ]
+    return ctx.memo[key]
+
+
+def _anchors(ctx: Ctx, rated: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The loved titles by step, then verdict, then the day's order; none loved, the single best."""
+    loved = [r for r in rated if r["loved"]]
+    ordered = sorted(
+        loved or rated,
+        key=lambda r: (
+            -r["level"],
+            -(r["verdict"] if r["verdict"] is not None else -1),
+            _daily(ctx.user_id, ctx.day, f"anchor:{r['id']}"),
+        ),
+    )
+    return ordered if loved else ordered[:1]
 
 
 async def because_anchor(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 row 1 — "Because you liked *{anchor}*" or "More like *{anchor}*" / "{term} · {term}".
+    """§6.0 — "Because you liked *{anchor}*" or "More like *{anchor}*" / "{term} · {term}".
 
-    The anchor's likest unseen owned titles (decision 513), and a term pair every card carries.
-    The headline names no tier (decision 527).
+    Row `ctx.nth` tries anchors nth, nth + BECAUSE_ROWS, so no two rows, in either read, share one.
     """
     sid = "because_anchor"
     if not ctx.version:
         return None, Suppressed(sid, kind, "no DNA vocabulary imported — no terms to name")
-
-    # Both seen AND rated: neither implies the other. The anchor is the highest tier the board
-    # shows (ordered after `rescale_level`, so in Python), then the live verdict, then `s`.
-    tier_set = ctx.tier_set(kind)
-    candidates = await conn.fetch(
-        f"""
-        SELECT t.id, t.name, ls.tier AS model_tier, ls.s,
-               te.tier AS assigned, te.n_levels AS assigned_k, lv.value AS verdict
-          FROM ledger_state ls
-          JOIN title t ON t.id = ls.title_id
-          JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id AND ut.state = 'seen'
-          LEFT JOIN ({latest_tier_edit_sql()}) te ON te.title_id = ls.title_id
-          LEFT JOIN ({LIVE_LABEL_SQL}) lv ON lv.title_id = ls.title_id
-         WHERE ls.user_id = $1 AND t.kind = $2 AND ls.tier IS NOT NULL AND ls.observed
-        """,
-        ctx.user_id,
-        kind,
-    )
-    if not candidates:
+    rated = await _rated_seen(conn, ctx, kind, ctx.user_id)
+    if not rated:
         return None, Suppressed(
             sid, kind,
             "no title of this kind is both seen and rated with a fitted tier yet",
         )
+    tries = _anchors(ctx, rated)[ctx.nth::BECAUSE_ROWS][:BECAUSE_TRIES]
+    if not tries:
+        return None, Suppressed(sid, kind, "no loved title of this kind left to anchor this row")
+    for anchor in tries:
+        section, note = await _because(conn, ctx=ctx, kind=kind, anchor=anchor)
+        if section is not None:
+            break
+    return section, note
 
-    anchor = min(
-        candidates,
-        key=lambda r: (
-            -_board_level(r, len(tier_set)),
-            -(r["verdict"] if r["verdict"] is not None else -1),
-            -float(r["s"]),
-            int(r["id"]),
-        ),
-    )
+
+async def _because(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str, anchor: dict[str, Any]
+) -> tuple[Section | None, Suppressed | None]:
+    """One anchor's likest unseen owned titles (decision 513), and a term pair every card carries.
+    The headline names no tier (decision 527)."""
+    sid = "because_anchor"
+    tier_set = ctx.tier_set(kind)
     # Checked, not clamped: a model tier outside the set is a bug, not a state.
     model_index = int(anchor["model_tier"])
     if not 0 <= model_index < len(tier_set):
         return None, Suppressed(
             sid, kind, f"anchor tier index {model_index} is outside the tier set"
         )
-    index = _board_level(anchor, len(tier_set))
+    index = anchor["level"]
 
     # Decision 513: the anchor's nearest titles, then the pair of its terms that names them best.
     terms = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version, limit=None)
@@ -422,14 +509,6 @@ async def because_anchor(
             f"unseen owned titles{_thinned_by(ctx)}",
         )
     members, t1, t2 = chosen
-    scored = await conn.fetch(
-        CARD_SELECT + CARD_FROM + " WHERE t.kind = $2 AND t.id = ANY($4)",
-        ctx.user_id, kind, ctx.bundle_version, members,
-    )
-    by_id = {int(r["title_id"]): r for r in scored}
-    rows = [by_id[i] for i in members]
-
-    beta = ctx.beta(kind)
     tier = tier_set[index]
     if anchor["verdict"] == 2:
         title = f"Because you liked {anchor['name']}"
@@ -442,7 +521,7 @@ async def because_anchor(
         why=why_mod.phrase([t1, t2]),
         why_terms=[t1.with_role("member"), t2.with_role("member")],
         anchor={"title_id": int(anchor["id"]), "name": anchor["name"], "tier": tier},
-        items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
+        items=await _cards(conn, ctx, kind, members, order=members),
     )
     return _finish(section, shelf_id=sid, ctx=ctx)
 
@@ -453,10 +532,8 @@ async def because_anchor(
 async def top_of_ledger(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 row 2 — "Top of your ledger", from `scoring.serve.top_scored`, the one ranked statement.
-
-    The one shelf that includes seen titles, and says so (proposal 25).
-    """
+    """§6.0 — "Your top picks", from `scoring.serve.top_scored`, the one ranked statement; unseen
+    titles only (decision 562)."""
     sid = "top_of_ledger"
     if not ctx.bundle_version:
         return None, Suppressed(sid, kind, "no active artifact bundle — no scores to rank")
@@ -469,6 +546,7 @@ async def top_of_ledger(
         bundle_version=ctx.bundle_version,
         limit=SHELF_CAP,
         exclude=sorted(ctx.avoided),
+        unseen_only=True,
     )
     # The β the ordering used: stored `blend_beta`, or 0.0 when never fitted.
     beta = float(ranked["beta"])
@@ -480,9 +558,9 @@ async def top_of_ledger(
     ]
     why = (
         # Member register (decision 476); β travels in the gated `why_numbers`.
-        "The ones we think you'll enjoy most — rewatches included"
+        "The ones we think you'll enjoy most"
         if personalised
-        else "What most people rate highest, until your own ratings take over — rewatches included"
+        else "What most people rate highest, until your own ratings take over"
     )
     section = Section(
         kind=kind,
@@ -528,6 +606,7 @@ async def never_watched_term(
         min_seen=FRONTIER_MIN_SEEN,
         carrier_floor=SECTION_FLOOR,
         exclude=sorted(ctx.excluded),
+        liked=await _liked(conn, ctx, kind),
     )
     if found is None:
         return None, Suppressed(
@@ -543,15 +622,6 @@ async def never_watched_term(
         conn, terms=[candidate.term], kind=kind, version=ctx.version, user_id=ctx.user_id,
         exclude=sorted(ctx.excluded),
     )
-    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
-    rows = await conn.fetch(
-        CARD_SELECT + CARD_FROM + """
-         WHERE t.kind = $2 AND t.id = ANY($4)
-         ORDER BY us.score DESC NULLS LAST, t.year DESC NULLS LAST, t.id
-         LIMIT $5
-        """,
-        ctx.user_id, kind, ctx.bundle_version, ids, SHELF_CAP,
-    )
     section = Section(
         kind=kind,
         heading=KIND_HEADINGS[kind],
@@ -562,7 +632,7 @@ async def never_watched_term(
                      "min_seen": FRONTIER_MIN_SEEN},
         # §6.4's "honestly labelled" exploratory slot, in words.
         caption="A step outside what you usually watch, on purpose",
-        items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
+        items=await _cards(conn, ctx, kind, ids),
     )
     return _finish(section, shelf_id=sid, ctx=ctx)
 
@@ -602,14 +672,15 @@ def _standardised(pos: int, n: int) -> float:
 
 
 async def shared_sweet_spot(
-    conn: asyncpg.Connection, *, ctx: Ctx, kind: str, partner: dict[str, Any] | None
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 row 4 — "You and {other} would both enjoy these": unseen by both, above both CDF floors.
+    """§6.0 — "You and {other} would both enjoy these": unseen by both, above both CDF floors.
 
     Ordered by the plain average of rank-standardised scores over the owned library, as Tonight's
     pool is (decision 477). Either member's avoid set is excluded (decision 512).
     """
     sid = "shared_sweet_spot"
+    partner = ctx.partner
     if partner is None:
         return None, Suppressed(sid, kind, "no other member to share a sweet spot with")
     if not ctx.bundle_version:
@@ -718,6 +789,278 @@ async def school_night(
             "Series runtime is minutes per episode" if kind == "series" else None
         ),
         items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
+    )
+    return _finish(section, shelf_id=sid, ctx=ctx)
+
+
+# --- taste rows (decision 563) ----------------------------------------------------------------
+
+
+async def _liked(conn: asyncpg.Connection, ctx: Ctx, kind: str) -> list[tuple[WhyTerm, float]]:
+    if ("liked", kind) not in ctx.memo:
+        ctx.memo["liked", kind] = await why_mod.liked_terms(
+            conn, user_id=ctx.user_id, kind=kind, version=ctx.version
+        )
+    return ctx.memo["liked", kind]
+
+
+@dataclass(frozen=True)
+class _Taste:
+    """Per liked term: the liked seen titles carrying it, best first; the unseen owned ones; the liked
+    owned ones with no real play in REWATCH_MONTHS."""
+
+    liked: list[tuple[WhyTerm, float]]
+    carried: dict[str, list[int]]
+    names: dict[int, str]
+    unseen: dict[str, set[int]]
+    again: dict[str, set[int]]
+
+
+async def _taste(conn: asyncpg.Connection, ctx: Ctx, kind: str) -> _Taste:
+    if ("taste", kind) in ctx.memo:
+        return ctx.memo["taste", kind]
+    liked = await _liked(conn, ctx, kind)
+    terms = [t.term for t, _aff in liked]
+    rows = await conn.fetch(
+        f"""
+        WITH lv AS ({LIVE_LABEL_SQL})
+        SELECT DISTINCT d.term, t.id, t.name, t.is_owned, ls.s,
+               (ut.played_at IS NULL OR ut.played_at < now() - make_interval(months => $4)) AS long_ago
+          FROM lv
+          JOIN title t ON t.id = lv.title_id AND t.kind = $2
+          JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1 AND ut.state = 'seen'
+          JOIN dna_tagged d ON d.title_id = t.id AND d.version = $3 AND d.term = ANY($5::text[])
+          LEFT JOIN ledger_state ls ON ls.user_id = $1 AND ls.title_id = t.id
+         WHERE lv.value = {taste.LIKED}
+         ORDER BY ls.s DESC NULLS LAST, t.id
+        """,
+        ctx.user_id, kind, ctx.version, REWATCH_MONTHS, terms,
+    )
+    carried: dict[str, list[int]] = {}
+    again: dict[str, set[int]] = {}
+    for r in rows:
+        carried.setdefault(r["term"], []).append(int(r["id"]))
+        if r["is_owned"] and r["long_ago"]:
+            again.setdefault(r["term"], set()).add(int(r["id"]))
+    unseen: dict[str, set[int]] = {}
+    for r in await conn.fetch(
+        """
+        SELECT DISTINCT d.term, d.title_id
+          FROM dna_tagged d
+          JOIN title t ON t.id = d.title_id
+          LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1
+         WHERE d.version = $3 AND d.term = ANY($4::text[]) AND t.kind = $2 AND t.is_owned
+           AND COALESCE(ut.state, 'unseen') = 'unseen'
+        """,
+        ctx.user_id, kind, ctx.version, terms,
+    ):
+        unseen.setdefault(r["term"], set()).add(int(r["title_id"]))
+    found = _Taste(liked, carried, {int(r["id"]): r["name"] for r in rows}, unseen, again)
+    ctx.memo["taste", kind] = found
+    return found
+
+
+async def _term_pair(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str, again: bool
+) -> tuple[Section | None, Suppressed | None]:
+    """"{Label} & {label}": unseen owned titles carrying two liked terms of different groups, or with
+    `again` the liked ones not played in a long while. No term is named twice in one read."""
+    sid = "rewatch_term" if again else "taste_term"
+    if not ctx.version:
+        return None, Suppressed(sid, kind, "no DNA vocabulary imported — no terms to name")
+    found = await _taste(conn, ctx, kind)
+    leads = sorted(
+        (t.term for t, _aff in found.liked[:TASTE_LEADS]),
+        key=lambda term: _daily(ctx.user_id, ctx.day, f"term:{term}"),
+    )
+    named = ctx.memo.setdefault("named", set())
+    pair = why_mod.taste_pair(
+        found.liked,
+        {term: set(ids) for term, ids in found.carried.items()},
+        {term: ids - ctx.excluded for term, ids in (found.again if again else found.unseen).items()},
+        leads=leads[ctx.nth:] + leads[:ctx.nth],
+        taken=named,
+        liked_min=TASTE_LIKED_MIN,
+        floor=SECTION_FLOOR,
+    )
+    if pair is None:
+        return None, Suppressed(
+            sid, kind,
+            f"no two liked terms of different groups are carried by {TASTE_LIKED_MIN} titles you "
+            f"liked and by {SECTION_FLOOR} "
+            f"{'you liked and have not watched in a long while' if again else 'unseen owned titles'}"
+            f"{_thinned_by(ctx)}",
+        )
+    first, second, ids = pair
+    title = f"{first.name} & {second.name}"
+    title = title[:1].upper() + title[1:]
+    if again:
+        order = sorted(ids, key=lambda i: _daily(ctx.user_id, ctx.day, f"title:{i}"))
+        section = Section(
+            kind=kind, heading=KIND_HEADINGS[kind], title=f"{title}, again",
+            why="Ones you liked, not watched in a long while",
+            why_terms=[first, second], why_numbers={"months": REWATCH_MONTHS},
+            items=await _cards(conn, ctx, kind, order, seen=True, order=order),
+        )
+    else:
+        both = set(found.carried[second.term])
+        films = [found.names[i] for i in found.carried[first.term] if i in both][:2]
+        section = Section(
+            kind=kind, heading=KIND_HEADINGS[kind], title=title,
+            why=f"Like {films[0]} and {films[1]}, which you liked",
+            why_terms=[first, second],
+            items=await _cards(conn, ctx, kind, sorted(ids)),
+        )
+    section, note = _finish(section, shelf_id=sid, ctx=ctx)
+    if section is not None:
+        named.update((first.term, second.term))
+    return section, note
+
+
+async def taste_term(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
+) -> tuple[Section | None, Suppressed | None]:
+    return await _term_pair(conn, ctx=ctx, kind=kind, again=False)
+
+
+async def rewatch_term(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
+) -> tuple[Section | None, Suppressed | None]:
+    return await _term_pair(conn, ctx=ctx, kind=kind, again=True)
+
+
+# --- hidden gems, acclaimed, the other member's (decision 563) --------------------------------
+
+
+async def hidden_gems(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
+) -> tuple[Section | None, Suppressed | None]:
+    """Crowd-rated titles in the least-rated GEM_SHARE of the kind's owned ones, in the upper half of
+    the member's own scores."""
+    sid = "hidden_gems"
+    rows = await conn.fetch(
+        """
+        WITH k AS (
+            SELECT t.id,
+                   cume_dist() OVER (ORDER BY COALESCE(tp.item_n, 0)) AS crowd,
+                   percent_rank() OVER (ORDER BY us.score NULLS FIRST) AS mine
+              FROM title t
+              LEFT JOIN title_prior tp ON tp.title_id = t.id AND tp.bundle_version = $3
+              LEFT JOIN user_score us ON us.title_id = t.id AND us.user_id = $1
+                                     AND us.kind = t.kind AND us.bundle_version = $3
+             WHERE t.kind = $2 AND t.is_owned
+        )
+        SELECT k.id FROM k JOIN title_prior tp ON tp.title_id = k.id AND tp.bundle_version = $3
+         WHERE tp.item_n > 0 AND k.crowd <= $4 AND k.mine >= $5
+        """,
+        ctx.user_id, kind, ctx.bundle_version, GEM_SHARE, GEM_MIN_CDF,
+    )
+    section = Section(
+        kind=kind, heading=KIND_HEADINGS[kind], title="Hidden gems",
+        why="Few people have rated them, but they're close to your taste",
+        why_numbers={"share": GEM_SHARE, "min_cdf": GEM_MIN_CDF},
+        items=await _cards(conn, ctx, kind, [int(r["id"]) for r in rows if r["id"] not in ctx.excluded]),
+    )
+    return _finish(section, shelf_id=sid, ctx=ctx)
+
+
+async def acclaimed(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
+) -> tuple[Section | None, Suppressed | None]:
+    """Decision 547's platform score orders this row and enters no model (§4.1 rule 3)."""
+    sid = "acclaimed"
+    ids = await library.acclaimed(
+        conn, kind=kind, share=ACCLAIMED_SHARE, min_votes=mix.WELL_KNOWN_VOTES
+    )
+    order = [i for i in ids if i not in ctx.excluded]
+    section = Section(
+        kind=kind, heading=KIND_HEADINGS[kind], title="Acclaimed",
+        why="Among the highest rated anywhere",
+        why_numbers={"share": ACCLAIMED_SHARE, "min_votes": mix.WELL_KNOWN_VOTES},
+        items=await _cards(conn, ctx, kind, order, order=order),
+    )
+    return _finish(section, shelf_id=sid, ctx=ctx)
+
+
+async def partner_loved(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
+) -> tuple[Section | None, Suppressed | None]:
+    """"{other} loved these": the other member's top two steps, never which (decision 563 item 4)."""
+    sid = "partner_loved"
+    if ctx.partner is None:
+        return None, Suppressed(sid, kind, "no other member")
+    theirs = await _rated_seen(conn, ctx, kind, ctx.partner["user_id"])
+    section = Section(
+        kind=kind, heading=KIND_HEADINGS[kind], title=f"{ctx.partner['name']} loved these",
+        why="You haven't seen them yet",
+        why_numbers={"partner_user_id": ctx.partner["user_id"]},
+        items=await _cards(
+            conn, ctx, kind, [r["id"] for r in theirs if r["loved"] and r["id"] not in ctx.excluded]
+        ),
+    )
+    return _finish(section, shelf_id=sid, ctx=ctx)
+
+
+# --- rewatch rows (decision 562) --------------------------------------------------------------
+
+
+async def watch_again(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
+) -> tuple[Section | None, Suppressed | None]:
+    """The member's loved titles with no real play in REWATCH_MONTHS: never played first, then the
+    longest ago."""
+    sid = "watch_again"
+    rated = await _rated_seen(conn, ctx, kind, ctx.user_id)
+    due = sorted(
+        (r for r in rated if r["loved"] and r["long_ago"] and r["is_owned"]
+         and r["id"] not in ctx.excluded),
+        key=lambda r: (r["played_at"] or _LONG_AGO, _daily(ctx.user_id, ctx.day, f"title:{r['id']}")),
+    )
+    order = [r["id"] for r in due]
+    section = Section(
+        kind=kind, heading=KIND_HEADINGS[kind], title="Watch again",
+        why="Ones you loved, not watched in a long while",
+        why_numbers={"months": REWATCH_MONTHS},
+        items=await _cards(conn, ctx, kind, order, seen=True, order=order),
+    )
+    return _finish(section, shelf_id=sid, ctx=ctx)
+
+
+async def rewatch_together(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
+) -> tuple[Section | None, Suppressed | None]:
+    """"Watch again with {other}": seen and liked by both, neither with a real play in
+    REWATCH_MONTHS, ordered by the older of the two plays."""
+    sid = "rewatch_together"
+    if ctx.partner is None:
+        return None, Suppressed(sid, kind, "no other member to watch again with")
+    rows = await conn.fetch(
+        f"""
+        WITH mine AS ({live_label_sql('$1')}), theirs AS ({live_label_sql('$4')})
+        SELECT t.id, a.played_at AS mine_at, b.played_at AS theirs_at
+          FROM title t
+          JOIN user_title a ON a.title_id = t.id AND a.user_id = $1 AND a.state = 'seen'
+          JOIN user_title b ON b.title_id = t.id AND b.user_id = $4 AND b.state = 'seen'
+          JOIN mine m ON m.title_id = t.id AND m.value = {taste.LIKED}
+          JOIN theirs x ON x.title_id = t.id AND x.value = {taste.LIKED}
+         WHERE t.kind = $2 AND t.is_owned AND NOT (t.id = ANY($5::int[]))
+           AND (a.played_at IS NULL OR a.played_at < now() - make_interval(months => $3))
+           AND (b.played_at IS NULL OR b.played_at < now() - make_interval(months => $3))
+        """,
+        ctx.user_id, kind, REWATCH_MONTHS, ctx.partner["user_id"], sorted(ctx.excluded),
+    )
+    order = [
+        int(r["id"]) for r in sorted(
+            rows,
+            key=lambda r: (min(r["mine_at"] or _LONG_AGO, r["theirs_at"] or _LONG_AGO),
+                           _daily(ctx.user_id, ctx.day, f"title:{r['id']}")),
+        )
+    ]
+    section = Section(
+        kind=kind, heading=KIND_HEADINGS[kind], title=f"Watch again with {ctx.partner['name']}",
+        why="You both liked these, and it's been a while",
+        why_numbers={"months": REWATCH_MONTHS, "partner_user_id": ctx.partner["user_id"]},
+        items=await _cards(conn, ctx, kind, order, seen=True, order=order),
     )
     return _finish(section, shelf_id=sid, ctx=ctx)
 
@@ -911,7 +1254,7 @@ async def _unowned_for_everyone(
 
 
 async def worth_getting(
-    conn: asyncpg.Connection, *, ctx: Ctx, kind: str, avoided: taste.Avoided | None
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
     """§6.0 row 7 — "Worth getting": beyond the library, absent until the person has rated enough of
     the kind. A ranking shelf that neither claims nor is thinned (decision 544)."""
@@ -928,7 +1271,7 @@ async def worth_getting(
             f"{WORTH_GETTING_MIN_LABELS} with a ranking of your own",
         )
     items = await _unowned_for_one(
-        conn, ctx=ctx, kind=kind, member_id=ctx.user_id, avoids=[avoided] if avoided else [],
+        conn, ctx=ctx, kind=kind, member_id=ctx.user_id, avoids=[ctx.avoid] if ctx.avoid else [],
         cap=SHELF_CAP, keep_wanted=False,
     )
     section = Section(
@@ -1026,16 +1369,60 @@ async def worth_getting_list(
 
 # --- assembly -----------------------------------------------------------------------------------
 
-# `ranking=True` for the six shelves ordered by a ledger score; `new_in_library` is ordered by
-# recency. All seven partition by kind regardless — a Home row reads as a recommendation.
-RANKING_SHELVES: frozenset[str] = frozenset(SHELF_IDS) - {"new_in_library"}
-
-# Decision 475's claim order: "Your top picks" first. Display order stays `SHELF_IDS`.
-CLAIM_ORDER: tuple[str, ...] = ("top_of_ledger",) + tuple(
-    s for s in SHELF_IDS if s != "top_of_ledger"
+FAMILIES = {
+    "because_anchor": because_anchor,
+    "top_of_ledger": top_of_ledger,
+    "taste_term": taste_term,
+    "never_watched_term": never_watched_term,
+    "shared_sweet_spot": shared_sweet_spot,
+    "hidden_gems": hidden_gems,
+    "acclaimed": acclaimed,
+    "partner_loved": partner_loved,
+    "school_night": school_night,
+    "watch_again": watch_again,
+    "rewatch_together": rewatch_together,
+    "rewatch_term": rewatch_term,
+    "new_in_library": new_in_library,
+    "worth_getting": worth_getting,
+}
+# Decision 563: the families dealt in the day's order, with their rows; one row unless named.
+MIDDLE: tuple[str, ...] = (
+    "because_anchor", "taste_term", "never_watched_term", "shared_sweet_spot", "hidden_gems",
+    "acclaimed", "partner_loved", "school_night", "rewatch_together", "rewatch_term",
 )
+MIDDLE_ROWS = {"because_anchor": range(1, BECAUSE_ROWS), "taste_term": range(TASTE_ROWS)}
+TAIL: tuple[str, ...] = ("new_in_library", "worth_getting")
+# Decision 562: the only rows of seen titles.
+REWATCH: frozenset[str] = frozenset({"watch_again", "rewatch_together", "rewatch_term"})
+# The rows for two, which leave out what either member avoids (decision 512).
+SHARED: frozenset[str] = frozenset({"shared_sweet_spot", "rewatch_together"})
+
+# `ranking=True` for rows ordered by a ledger score. Every row partitions by kind regardless.
+RANKING_SHELVES: frozenset[str] = frozenset(FAMILIES) - REWATCH - {"new_in_library", "acclaimed"}
 # Decision 544: Worth getting holds titles no other shelf can, so it neither claims nor is thinned.
-CLAIMING_SHELVES: frozenset[str] = RANKING_SHELVES - {"worth_getting"}
+CLAIMING_SHELVES: frozenset[str] = frozenset(FAMILIES) - set(TAIL)
+
+
+def plan(user_id: int, day: str) -> list[tuple[str, int]]:
+    """One day's rows as (family, nth), both kinds: Because #1 and top picks lead, Watch again is
+    fourth, New and Worth getting close; the rest go in the day's order, one row a family a pass, so
+    two rows of one family never touch."""
+    left = {
+        f: list(MIDDLE_ROWS.get(f, range(1)))
+        for f in sorted(MIDDLE, key=lambda f: _daily(user_id, day, f))
+    }
+    middle: list[tuple[str, int]] = []
+    while left:
+        dealt = list(left)
+        if middle and len(dealt) > 1 and dealt[0] == middle[-1][0]:
+            dealt[0], dealt[1] = dealt[1], dealt[0]
+        for family in dealt:
+            middle.append((family, left[family].pop(0)))
+            if not left[family]:
+                del left[family]
+    steps = [("because_anchor", 0), ("top_of_ledger", 0), *middle]
+    steps.insert(3, ("watch_again", 0))
+    return steps + [(family, 0) for family in TAIL]
 
 
 async def live_verdict_count(conn: asyncpg.Connection, *, user_id: int) -> int:
@@ -1043,131 +1430,161 @@ async def live_verdict_count(conn: asyncpg.Connection, *, user_id: int) -> int:
     return int(await conn.fetchval(f"SELECT count(*) FROM ({LIVE_LABEL_SQL}) l", user_id) or 0)
 
 
+async def _context(
+    conn: asyncpg.Connection, *, user: Any, kinds: Sequence[str], bundle_version: str | None, day: str
+) -> tuple[Ctx, bool]:
+    """What both reads of Home resolve once, and whether the member has no verdicts yet."""
+    chosen = library.normalise_kinds(kinds)
+    version = await why_mod.vocabulary_version(conn)
+    partner = await partner_for(conn, user_id=user.id)
+    avoid = await taste.avoided_for(conn, user_id=user.id, version=version)
+    theirs = (
+        await taste.avoided_for(conn, user_id=partner["user_id"], version=version)
+        if partner is not None else None
+    )
+    memo: dict[Any, Any] = {}
+    for kind in chosen:
+        memo["mine", kind] = await taste.avoided_titles(conn, [avoid], kind=kind, version=version)
+        memo["both", kind] = (
+            await taste.avoided_titles(conn, [avoid, theirs], kind=kind, version=version)
+            if theirs is not None else memo["mine", kind]
+        )
+    ctx = Ctx(
+        user_id=user.id,
+        bundle_version=bundle_version,
+        version=version,
+        kinds=tuple(chosen),
+        tier_sets={k: await tier_set_of(conn, user_id=user.id, kind=k) for k in chosen},
+        betas={k: await _beta(conn, user_id=user.id, kind=k) for k in chosen},
+        day=day,
+        partner=partner,
+        avoid=avoid,
+        memo=memo,
+    )
+    verdicts = await live_verdict_count(conn, user_id=user.id)
+    return ctx, verdicts == 0 and bundle_version is not None
+
+
 async def build_shelves(
     conn: asyncpg.Connection,
     *,
     ctx: Ctx,
+    steps: Sequence[tuple[str, int]],
+    shown: Sequence[int],
     zero_verdicts: bool,
-    avoided: taste.Avoided | None,
+    room: int,
 ) -> tuple[list[Shelf], list[Suppressed]]:
-    """§6.0's seven shelves, in the table's order, each as one section per selected kind.
+    """`steps` as shelves of one section per kind, built top picks first and then in order, with
+    `shown` already claimed; at `room` rows a kind only the tail is still tried.
 
     With zero verdicts every score-ordered shelf is suppressed (proposal 20).
     """
-    partner = await partner_for(conn, user_id=ctx.user_id)
-    theirs = (
-        await taste.avoided_for(conn, user_id=partner["user_id"], version=ctx.version)
-        if partner is not None else None
-    )
-    mine_out: dict[str, frozenset[int]] = {}
-    both_out: dict[str, frozenset[int]] = {}
-    for kind in ctx.kinds:
-        mine_out[kind] = await taste.avoided_titles(conn, [avoided], kind=kind, version=ctx.version)
-        both_out[kind] = (
-            await taste.avoided_titles(conn, [avoided, theirs], kind=kind, version=ctx.version)
-            if theirs is not None else mine_out[kind]
-        )
-    built: dict[tuple[str, str], Section] = {}
-    notes: dict[tuple[str, str], Suppressed] = {}
-    claimed: dict[str, set[int]] = {kind: set() for kind in ctx.kinds}
+    built: dict[tuple[tuple[str, int], str], Section] = {}
+    notes: dict[tuple[tuple[str, int], str], Suppressed] = {}
+    claimed: dict[str, set[int]] = {kind: set(shown) for kind in ctx.kinds}
+    rows = dict.fromkeys(ctx.kinds, 0)
 
-    # Decision 475: built in claim order, rendered in the table's, so no title shows twice.
-    for shelf_id in CLAIM_ORDER:
-        ranking = shelf_id in RANKING_SHELVES
+    # Decision 475: built in claim order, rendered in plan order, so no title shows twice.
+    for step in sorted(steps, key=lambda s: s[0] != "top_of_ledger"):
+        family, nth = step
         for kind in ctx.kinds:
-            if zero_verdicts and ranking:
-                notes[shelf_id, kind] = Suppressed(
-                    shelf_id, kind, "no verdicts yet — a score-ordered shelf would rank on a "
-                                    "ledger this profile does not have"
+            if family not in TAIL and rows[kind] >= room:
+                notes[step, kind] = Suppressed(family, kind, f"Home holds {ROW_CAP} rows of a kind")
+                continue
+            if zero_verdicts and family in RANKING_SHELVES:
+                notes[step, kind] = Suppressed(
+                    family, kind, "no verdicts yet — a score-ordered shelf would rank on a "
+                                  "ledger this profile does not have"
                 )
                 continue
-            scoped = (
-                replace(
-                    ctx,
+            scoped = replace(ctx, nth=nth)
+            if family in CLAIMING_SHELVES:
+                scoped = replace(
+                    scoped,
                     claimed=frozenset(claimed[kind]),
-                    avoided=both_out[kind] if shelf_id == "shared_sweet_spot" else mine_out[kind],
+                    avoided=ctx.memo["both" if family in SHARED else "mine", kind],
                 )
-                if shelf_id in CLAIMING_SHELVES else ctx
-            )
-            if shelf_id == "because_anchor":
-                section, note = await because_anchor(conn, ctx=scoped, kind=kind)
-            elif shelf_id == "top_of_ledger":
-                section, note = await top_of_ledger(conn, ctx=scoped, kind=kind)
-            elif shelf_id == "never_watched_term":
-                section, note = await never_watched_term(conn, ctx=scoped, kind=kind)
-            elif shelf_id == "shared_sweet_spot":
-                section, note = await shared_sweet_spot(
-                    conn, ctx=scoped, kind=kind, partner=partner
-                )
-            elif shelf_id == "school_night":
-                section, note = await school_night(conn, ctx=scoped, kind=kind)
-            elif shelf_id == "worth_getting":
-                section, note = await worth_getting(conn, ctx=scoped, kind=kind, avoided=avoided)
-            else:
-                section, note = await new_in_library(conn, ctx=scoped, kind=kind)
+            section, note = await FAMILIES[family](conn, ctx=scoped, kind=kind)
             if section is not None:
-                built[shelf_id, kind] = section
-                if shelf_id in CLAIMING_SHELVES:
+                built[step, kind] = section
+                rows[kind] += 1
+                if family in CLAIMING_SHELVES:
                     claimed[kind].update(int(c["title_id"]) for c in section.items)
             elif note is not None:
-                notes[shelf_id, kind] = note
+                notes[step, kind] = note
 
     shelves: list[Shelf] = []
     dropped: list[Suppressed] = []
-    for shelf_id in SHELF_IDS:
-        shelf = Shelf(shelf_id, ranking=shelf_id in RANKING_SHELVES)
+    for step in steps:
+        family, nth = step
+        shelf = Shelf(family, ranking=family in RANKING_SHELVES, key=f"{family}:{nth}",
+                      seen_only=family in REWATCH)
         for kind in ctx.kinds:
-            if (shelf_id, kind) in built:
-                shelf.sections.append(built[shelf_id, kind])
-            elif (shelf_id, kind) in notes:
-                dropped.append(notes[shelf_id, kind])
+            if (step, kind) in built:
+                shelf.sections.append(built[step, kind])
+            elif (step, kind) in notes:
+                dropped.append(notes[step, kind])
         # §6.0: a shelf that cannot justify itself is ABSENT, never present and empty.
         if shelf.sections:
             shelves.append(shelf)
+    # Decision 516: original title and language, one read for every card.
+    await library.carry_original_names(
+        conn, [card for shelf in shelves for s in shelf.sections for card in s.items], key="title_id"
+    )
     return shelves, dropped
 
 
 async def build_home(
     conn: asyncpg.Connection, *, user: Any, kinds: Sequence[str], bundle_version: str | None
 ) -> dict[str, Any]:
-    """The whole §6.0 Home payload, ungated. `rail.redact` applies decision 117 afterwards."""
-    chosen = library.normalise_kinds(kinds)
-    ctx = Ctx(
-        user_id=user.id,
-        bundle_version=bundle_version,
-        version=await why_mod.vocabulary_version(conn),
-        kinds=tuple(chosen),
-        tier_sets={k: await tier_set_of(conn, user_id=user.id, kind=k) for k in chosen},
-        betas={k: await _beta(conn, user_id=user.id, kind=k) for k in chosen},
+    """Home's first read, ungated: the notices and the plan's first HEAD_SLOTS rows; `more` names
+    the day `build_rows` reads the rest of. `rail.redact` applies decision 117 afterwards."""
+    day = notices.today().isoformat()
+    ctx, zero_verdicts = await _context(
+        conn, user=user, kinds=kinds, bundle_version=bundle_version, day=day
     )
-    verdicts = await live_verdict_count(conn, user_id=user.id)
-    avoided = await taste.avoided_for(conn, user_id=user.id, version=ctx.version)
+    steps = plan(user.id, day)
     shelves, dropped = await build_shelves(
-        conn,
-        ctx=ctx,
-        zero_verdicts=(verdicts == 0 and bundle_version is not None),
-        avoided=avoided,
-    )
-    # Decision 516: original title and language, one read for every card.
-    await library.carry_original_names(
-        conn, [card for shelf in shelves for s in shelf.sections for card in s.items], key="title_id"
+        conn, ctx=ctx, steps=steps[:HEAD_SLOTS], shown=(), zero_verdicts=zero_verdicts,
+        room=HEAD_SLOTS,
     )
     payload = {
-        "kinds": chosen,
+        "kinds": list(ctx.kinds),
         "banner": await pending_verdicts(conn, user_id=user.id),
         "setup_notice": await setup_notice(conn, user_id=user.id) if bundle_version else None,
         # OWNED titles per kind: what the shelves draw on.
         "library": await library.count_by_kind(conn, owned="only"),
         "shelves": [s.as_dict() for s in shelves],
         "shelves_total": len(shelves),
+        "more": {"day": day} if len(steps) > HEAD_SLOTS else None,
         "degraded": _degraded(bundle_version),
         "suppressed": [s.as_dict() for s in dropped],
         # Decision 512's avoid set, ungated: facts about their own ratings.
-        "avoiding": avoided.as_dict() if avoided else None,
+        "avoiding": ctx.avoid.as_dict() if ctx.avoid else None,
         "arrived": await wish.arrived(conn, user_id=user.id),
         "wish": await wish.summary(conn),
     }
     return await notices.apply_hidden(conn, user_id=user.id, payload=payload)
+
+
+async def build_rows(
+    conn: asyncpg.Connection,
+    *,
+    user: Any,
+    kinds: Sequence[str],
+    bundle_version: str | None,
+    day: str,
+    shown: Sequence[int],
+) -> dict[str, Any]:
+    """Home's second read: the rest of `day`'s plan, with what the first read `shown` claimed."""
+    ctx, zero_verdicts = await _context(
+        conn, user=user, kinds=kinds, bundle_version=bundle_version, day=day
+    )
+    shelves, dropped = await build_shelves(
+        conn, ctx=ctx, steps=plan(user.id, day)[HEAD_SLOTS:], shown=shown,
+        zero_verdicts=zero_verdicts, room=ROW_CAP - len(TAIL) - HEAD_SLOTS,
+    )
+    return {"shelves": [s.as_dict() for s in shelves], "suppressed": [s.as_dict() for s in dropped]}
 
 
 async def _beta(conn: asyncpg.Connection, *, user_id: int, kind: str) -> float:
