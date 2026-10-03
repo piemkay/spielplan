@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from pydantic import Field
 
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.db import library
@@ -16,6 +17,10 @@ from spielplan.home import notices, rail, shelves
 from spielplan.models import artifacts
 
 router = APIRouter(prefix="/api", tags=["home"])
+
+# Bounds on what the first read can hand back: every card of a full head, every term pair it named.
+SHOWN_MAX = shelves.ROW_CAP * shelves.SHELF_CAP * 2
+NAMED_MAX = 64
 
 
 def _kinds(kind: list[str]) -> list[str]:
@@ -58,12 +63,14 @@ async def home_rows(
     request: Request,
     day: date,
     kind: list[Literal["movie", "series"]] = Query(...),
-    shown: list[int] = Query([]),
+    shown: list[Annotated[int, Field(ge=1, le=2**31 - 1)]] = Query([], max_length=SHOWN_MAX),
+    named: list[Annotated[str, Field(max_length=200)]] = Query([], max_length=NAMED_MAX),
 ) -> dict[str, Any]:
-    """The rest of `day`'s rows after the first read, leaving out the titles it `shown` (decision 563)."""
+    """The rest of `day`'s rows after the first read, leaving out the titles it `shown` and the
+    "kind:term" terms its term rows `named` (decision 563)."""
     payload = await shelves.build_rows(
         conn, user=user, kinds=_kinds(kind), bundle_version=await _bundle(request, conn),
-        day=day.isoformat(), shown=shown,
+        day=day.isoformat(), shown=shown, named=named,
     )
     return rail.redact(payload, show_model=rail.visible_to(user))
 

@@ -25,6 +25,7 @@
     loadHome,
     loadHomeRows,
     modelGate,
+    namedTerms,
     otherKinds,
     partitionLine,
     partitionedByKind,
@@ -338,7 +339,7 @@
     // A failed rest read keeps the head, silently (decision 563).
     let rest = { shelves: [], suppressed: [] };
     try {
-      rest = await loadHomeRows(asked, res.more.day, shownIds(res));
+      rest = await loadHomeRows(asked, res.more.day, shownIds(res), namedTerms(res));
     } catch {}
     const whole = withRows(res, rest);
     if (homeKept.payload === res) homeKept.payload = whole;
