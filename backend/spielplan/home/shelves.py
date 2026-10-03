@@ -67,8 +67,9 @@ WORTH_GETTING_MIN_LABELS = 20
 WORTH_GETTING_POOL = 4
 # See all's whole list, longer than a shelf.
 WORTH_GETTING_LIST_CAP = 60
-# Decision 567: well-known feature films only; a niche genre opens on this many liked titles carrying it.
-WORTH_GETTING_MIN_CROWD = 5000
+# Decision 567: well-known feature films only (the Acclaimed row's vote floor); a niche genre opens on
+# this many liked titles carrying it.
+WORTH_GETTING_MIN_VOTES = mix.WELL_KNOWN_VOTES
 WORTH_GETTING_MIN_RUNTIME = 60
 WORTH_GETTING_NICHE = ("Documentary", "Music")
 WORTH_GETTING_NICHE_LIKES = 3
@@ -1176,7 +1177,9 @@ async def _shut_genres(conn: asyncpg.Connection, member_ids: Sequence[int], kind
 def _feature_sql(shut: str, excluded: str, decade: str) -> str:
     """Over aliases `t` and `tp`: a well-known feature film, in the decade when one is bound."""
     return f"""
-           AND tp.item_n >= {WORTH_GETTING_MIN_CROWD} AND t.runtime_min >= {WORTH_GETTING_MIN_RUNTIME}
+           AND tp.item_n > 0 AND t.runtime_min >= {WORTH_GETTING_MIN_RUNTIME}
+           AND t.id IN (SELECT title_id FROM ({library._PLATFORM_SCORE}) pv
+                         WHERE pv.votes >= {WORTH_GETTING_MIN_VOTES})
            AND NOT {genre_vocab.predicate(shut, excluded)}
            AND ({decade}::int IS NULL OR t.year >= {decade}::int AND t.year < {decade}::int + 10)
     """

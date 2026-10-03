@@ -17099,17 +17099,18 @@ with TV episodes (Decalogue), stage recordings, concerts and a cartoon short amo
 have any filter options."
 
 **The decision.**
-1. The row and See all, for anyone, show well-known feature films only: at least 5,000 crowd
-   ratings, 60 minutes or more (an unknown runtime is left out), never TV Movie, and Documentary or
+1. The row and See all, for anyone, show well-known feature films only: at least 25,000 platform
+   votes, the Acclaimed row's floor (decision 547's reader), 60 minutes or more (an unknown runtime is left out), never TV Movie, and Documentary or
    Music only where each member the list is for has liked three titles of the kind carrying it.
 2. See all filters by decade, Any by default, the 1950s to the 2020s, before its cap of 60, and
    orders best match (the default) or newest first.
 
 The spec is amended in place (v2.1.21): §6.0.
 
-**Cost.** One shared predicate and two query parameters. Crowd counts gather with age, so the floor
-keeps more classics than it drops: the default list stays old, and the decade and Newest first are
-the way to recent films. A film newer than the bundle's crowd data waits for the next bundle.
+**Cost.** One shared predicate and two query parameters. The floor counts platform votes, not the
+crowd dataset's ratings, which stop about 2019, so every decade to the 2020s fills. The floor drops
+the unknown, not the old: the person's own score favours classics, so the default list stays about
+two-thirds pre-1990, and the decade and Newest first are the way to recent films.
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 

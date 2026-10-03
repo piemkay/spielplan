@@ -1972,7 +1972,12 @@ async def _unowned(db, *, labels: int = 20) -> None:
         await db.execute(
             "INSERT INTO title_prior (title_id, bundle_version, b, b_i, item_n, gate, e_source) "
             "VALUES ($1, $2, 0.5, 0.5, $3, 0.9, 'backbone')",
-            title_id, BUNDLE, 0 if title_id == NO_CROWD else shelves.WORTH_GETTING_MIN_CROWD,
+            title_id, BUNDLE, 0 if title_id == NO_CROWD else 300,
+        )
+        await db.execute(
+            "INSERT INTO display.platform_rating (title_id, platform, metric, score, scale, votes) "
+            "VALUES ($1, 'imdb', 'user_score', 7.5, 10, $2)",
+            title_id, shelves.WORTH_GETTING_MIN_VOTES,
         )
         for user_id in users:
             await db.execute(
@@ -2070,7 +2075,8 @@ async def test_worth_getting_serves_well_known_features_and_a_documentary_once_o
     await db.execute("UPDATE title SET runtime_min = 45 WHERE id = 1062")
     await db.execute("UPDATE title SET runtime_min = NULL WHERE id = 1063")
     await db.execute(
-        "UPDATE title_prior SET item_n = $1 WHERE title_id = 1064", shelves.WORTH_GETTING_MIN_CROWD - 1
+        "UPDATE display.platform_rating SET votes = $1 WHERE title_id = 1064",
+        shelves.WORTH_GETTING_MIN_VOTES - 1,
     )
     assert _worth(await world.home(kinds=("movie",))) == [1065, 1069, 1068]
     assert _ids(await _see_all(world.client)) == [1065, 1069, 1068]
