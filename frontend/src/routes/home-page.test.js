@@ -142,6 +142,7 @@ function backend({
   titles = (/** @type {URLSearchParams} */ _params) => ({ items: [], total: 0, hidden: {} }),
   facets = (/** @type {string[]} */ _kinds) => ({ genres: [], decades: [] }),
   home = (/** @type {string[]} */ _kinds) => ({}),
+  rows = (/** @type {URLSearchParams} */ _params) => /** @type {any} */ ({ shelves: [], suppressed: [] }),
   wish = () => ({ mine: [], others: [], copy_text: '' }),
   vocabulary = { version: null, facets: [], terms: [] },
   people = { people: [] },
@@ -157,17 +158,18 @@ function backend({
       if (u.pathname === '/api/titles') payload = titles(u.searchParams);
       else if (u.pathname === '/api/facets') payload = facets(u.searchParams.getAll('kind'));
       else if (u.pathname === '/api/home') payload = home(u.searchParams.getAll('kind'));
+      else if (u.pathname === '/api/home/rows') payload = rows(u.searchParams);
       else if (u.pathname === '/api/wish') payload = wish();
       else if (u.pathname === '/api/vocabulary') payload = vocabulary;
       else if (u.pathname === '/api/people') payload = people;
       else if (u.pathname === '/api/prompts/finish') payload = prompts;
       else if (u.pathname.startsWith('/api/prompts/finish')) payload = [];
-      return Promise.resolve({
+      return Promise.resolve(payload).then((body) => ({
         ok: true,
         status: 200,
         headers: { get: () => null },
-        text: async () => JSON.stringify(payload)
-      });
+        text: async () => JSON.stringify(body)
+      }));
     })
   );
   return seen;
@@ -303,6 +305,82 @@ describe('the shelves (decision 527)', () => {
       expect(region.querySelector('h3[data-testid="shelf-title"]').textContent).toBe('Your top picks');
       expect(region.querySelector('h2[data-testid="shelf-title"]')).toBeNull();
     }
+  });
+});
+
+describe('the lower rows arrive in a second read (decision 563)', () => {
+  const shelf = (id, key, kind, titleIds) => ({
+    id,
+    key,
+    sections: [{
+      kind, heading: kind === 'movie' ? 'Films' : 'Series', title: key, why: 'For you',
+      items: titleIds.map((title_id) => ({ title_id, kind, name: `T${title_id}`, seen: false }))
+    }]
+  });
+  const worth = shelf('worth_getting', 'worth_getting', 'movie', [9]);
+  const shelfKeys = () =>
+    [...target.querySelectorAll('[data-testid="shelf-title"]')].map((h) => h.textContent);
+
+  it('reads the rest once with the day and every shown title, and the wish row waits for it', async () => {
+    /** @type {(rest: any) => void} */
+    let answer = () => {};
+    const seen = backend({
+      home: (kinds) => ({
+        kinds, library: {}, shelves_total: 2, more: { day: '2026-10-03' },
+        wish: { wanted: 1, both: 0, members: 2 },
+        shelves: [shelf('top_picks', 'top_picks', 'movie', [1, 2]), shelf('because_anchor', 'because_anchor:0', 'movie', [3])]
+      }),
+      rows: () => new Promise((resolve) => (answer = resolve))
+    });
+    await openHome();
+    expect(shelfKeys()).toEqual(['top_picks', 'because_anchor:0']);
+    expect($('[data-testid="home-wish-row"]'), 'no row that the rest would push down').toBeNull();
+    const reads = seen.filter((u) => u.startsWith('/api/home/rows'));
+    expect(reads).toHaveLength(1);
+    const params = new URL(reads[0], 'http://localhost').searchParams;
+    expect(params.getAll('kind')).toEqual(['movie']);
+    expect(params.get('day')).toBe('2026-10-03');
+    expect(params.getAll('shown')).toEqual(['1', '2', '3']);
+
+    answer({ shelves: [shelf('because_anchor', 'because_anchor:1', 'movie', [4]), worth], suppressed: [] });
+    await tick();
+    expect(shelfKeys()).toEqual(['top_picks', 'because_anchor:0', 'because_anchor:1', 'worth_getting']);
+    expect($('[data-testid="shelves"]').dataset.shelfCount).toBe('4');
+    expect($('[data-testid="home-wish-row"]').previousElementSibling.dataset.shelf).toBe('worth_getting');
+  });
+
+  it('keeps the head, quietly, when the rest fails', async () => {
+    backend({
+      home: (kinds) => ({
+        kinds, library: {}, shelves_total: 1, more: { day: '2026-10-03' },
+        wish: { wanted: 1, both: 0, members: 2 },
+        shelves: [shelf('top_picks', 'top_picks', 'movie', [1])]
+      }),
+      rows: () => Promise.reject(new Error('offline'))
+    });
+    await openHome();
+    expect(shelfKeys()).toEqual(['top_picks']);
+    expect(target.textContent).not.toContain('offline');
+    expect($('[data-testid="home-wish-row"]')).not.toBeNull();
+  });
+
+  it('drops a rest that lands after a kind switch', async () => {
+    const answers = [];
+    backend({
+      home: (kinds) => ({
+        kinds, library: {}, shelves_total: 1, more: kinds.includes('movie') ? { day: '2026-10-03' } : null,
+        shelves: [shelf('top_picks', 'top_picks', kinds[0], [kinds[0] === 'movie' ? 1 : 2])]
+      }),
+      rows: () => new Promise((resolve) => answers.push(resolve))
+    });
+    await openHome();
+    $('[data-testid="kind-series"]').click();
+    await tick();
+    answers[0]({ shelves: [shelf('hidden_gems', 'hidden_gems', 'movie', [5])], suppressed: [] });
+    await tick();
+    expect(shelfKeys()).toEqual(['top_picks']);
+    expect($('[data-shelf="hidden_gems"]'), "the films' rest on the series shelves").toBeNull();
+    expect($('[data-testid="shelf"]').dataset.kind).toBe('series');
   });
 });
 

@@ -15,6 +15,29 @@ export function loadHome(kinds) {
   return get(`/home${qs({ kind: kinds })}`);
 }
 
+// The rows below the head (decision 563): that day's plan, none of the titles the head shows.
+export function loadHomeRows(kinds, day, shown) {
+  return get(`/home/rows${qs({ kind: kinds, day, shown })}`);
+}
+
+export function shownIds(payload) {
+  return (payload?.shelves ?? []).flatMap((shelf) =>
+    (shelf.sections ?? []).flatMap((section) => section.items.map((item) => item.title_id))
+  );
+}
+
+export function withRows(payload, rest) {
+  const shelves = rest?.shelves ?? [];
+  const suppressed = rest?.suppressed;
+  return {
+    ...payload,
+    shelves: [...(payload.shelves ?? []), ...shelves],
+    shelves_total: (payload.shelves_total ?? 0) + shelves.length,
+    ...(suppressed?.length ? { suppressed: [...(payload.suppressed ?? []), ...suppressed] } : {}),
+    more: null
+  };
+}
+
 // Home's place while another tab is open (decision 530): its member, kinds, shelves and scroll.
 export const homeKept = { user: null, epoch: 0, kinds: null, payload: null, scrollY: 0 };
 
@@ -230,7 +253,7 @@ export function kindsFor(choice) {
 // One row per (shelf, kind), never concatenated (§4.1 rule 5).
 export function shelfRows(payload) {
   return (payload?.shelves ?? []).flatMap((shelf) =>
-    (shelf.sections ?? []).map((section) => ({ shelf: shelf.id, section }))
+    (shelf.sections ?? []).map((section) => ({ shelf: shelf.id, key: shelf.key ?? shelf.id, section }))
   );
 }
 
@@ -254,7 +277,9 @@ const WHY_NUMBER_NAMES = {
   min_seen: 'min seen',
   min_cdf: 'cdf floor',
   co_seen: 'co-seen',
-  max_minutes: 'max min'
+  max_minutes: 'max min',
+  months: 'months',
+  min_votes: 'min votes'
 };
 
 export function whyNumbersLine(numbers) {
