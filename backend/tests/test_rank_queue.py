@@ -1,4 +1,4 @@
-"""No database: the 70/20/10 mix is a distribution, checked by drawing twenty thousand times."""
+"""No database: the 50/25/15/10 mix is a distribution, checked by drawing twenty thousand times."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def pool(n=60, *, sigma=STRADDLING, seed=2, comparisons=None):
     )
 
 
-def test_a_long_draw_is_seventy_twenty_ten():
+def test_a_long_draw_is_fifty_twenty_five_fifteen_ten():
     candidates = pool()
     rng = random.Random(17)
     draws = [queue.draw(candidates, rng=rng) for _ in range(20_000)]
@@ -47,16 +47,18 @@ def test_a_long_draw_is_seventy_twenty_ten():
     arms = Counter(d.arm for d in draws)
 
     total = sum(arms.values())
-    assert arms[queue.ARM_BOUNDARY] / total == pytest.approx(0.70, abs=0.015)
-    assert arms[queue.ARM_EXPLORATION] / total == pytest.approx(0.20, abs=0.015)
+    assert arms[queue.ARM_BOUNDARY] / total == pytest.approx(0.50, abs=0.015)
+    assert arms[queue.ARM_CROSS] / total == pytest.approx(0.25, abs=0.015)
+    assert arms[queue.ARM_EXPLORATION] / total == pytest.approx(0.15, abs=0.015)
     assert arms[queue.ARM_HOLDOUT] / total == pytest.approx(0.10, abs=0.010)
 
 
 def test_the_shares_are_the_specs_own_numbers():
     """§6.3's own text, not a §4.3 bundle knob."""
     assert dict(queue.SHARES) == {
-        queue.ARM_BOUNDARY: 0.70,
-        queue.ARM_EXPLORATION: 0.20,
+        queue.ARM_BOUNDARY: 0.50,
+        queue.ARM_CROSS: 0.25,
+        queue.ARM_EXPLORATION: 0.15,
         queue.ARM_HOLDOUT: 0.10,
     }
     assert sum(share for _, share in queue.SHARES) == pytest.approx(1.0)
@@ -128,7 +130,8 @@ def test_a_pool_with_no_straddler_falls_back_to_exploration_and_says_so():
     rng = random.Random(9)
     arms = Counter(queue.draw(candidates, rng=rng).arm for _ in range(4_000))
     assert arms[queue.ARM_BOUNDARY] == 0
-    assert arms[queue.ARM_EXPLORATION] / 4_000 == pytest.approx(0.90, abs=0.02)
+    assert arms[queue.ARM_CROSS] / 4_000 == pytest.approx(0.25, abs=0.02)
+    assert arms[queue.ARM_EXPLORATION] / 4_000 == pytest.approx(0.65, abs=0.02)
     # The held-out share is untouched by the fallback, which is the whole point.
     assert arms[queue.ARM_HOLDOUT] / 4_000 == pytest.approx(0.10, abs=0.02)
 
@@ -239,7 +242,10 @@ def test_the_selector_reads_no_held_out_comparison():
     """Nothing in a `Candidate` carries a duel row, so there is no second path to the stream."""
     candidate = pool(n=2)[0]
     fields = set(vars(candidate))
-    assert fields == {"item", "comparisons", "straddle", "tier", "genres"}
+    assert fields == {
+        "item", "comparisons", "straddle", "tier", "genres", "terms", "embedding", "stale_days",
+        "answers_since",
+    }
     assert not hasattr(candidate.item, "duels")
 
 
@@ -435,18 +441,18 @@ def test_a_board_with_every_adaptive_pair_asked_still_draws_the_held_out_tenth()
     assert outcomes[queue.ARM_HOLDOUT] / 6_000 == pytest.approx(0.10, abs=0.015)
 
 
-def test_a_partner_sharing_a_genre_goes_first_among_the_five_nearest_and_is_never_required():
-    """Decision 538: ordered after the recent window and before the comparison count; it removes
-    nobody, so the sixth nearest is never reached and a board with no shared genre still pairs."""
+def test_an_alike_partner_goes_first_and_is_never_required():
+    """Decision 564: the anchor's top quarter by likeness is offered first, past the five nearest; a
+    resting title only after every rested one; a board with nothing alike still pairs."""
     spec = [(1, -0.01, 0.05)] + [(10 + i, 0.1 * i, 0) for i in range(1, 7)]
     crime = {1: ("Crime",), 14: ("Crime",), 16: ("Crime",)}
     candidates = board_of(spec, genres=crime, comparisons={14: 10})
     rng = random.Random(3)
-    assert Counter(queue._boundary(candidates, rng).title_b for _ in range(300)) == Counter({14: 300})
+    assert Counter(queue._boundary(candidates, rng).title_b for _ in range(300)) == Counter({16: 300})
 
     for _ in range(300):
-        rested = queue._boundary(candidates, rng, recent={14})
-        assert rested.title_b not in (14, 16), "the recent window still goes first"
+        rested = queue._boundary(candidates, rng, recent={14, 16})
+        assert rested.title_b not in (14, 16), "a resting title waits behind every rested one"
 
     plain = board_of(spec, comparisons={11: 4, 12: 3, 13: 0, 14: 5, 15: 5})
     assert {queue._boundary(plain, rng).title_b for _ in range(300)} == {13}
@@ -464,12 +470,14 @@ def test_the_held_out_arm_reads_no_genre():
         assert (a.title_a, a.title_b) == (b.title_a, b.title_b)
 
 
-def _tagged(assigned, genres, tier_set=TIER_SET):
+def _tagged(assigned, genres, tier_set=TIER_SET, terms=None):
     items = [
         board.Item(title_id=t, name=f"T{t}", s=0.0, sigma=1e-6, assigned_tier=tier)
         for t, tier in assigned.items()
     ]
-    found = queue.candidates(items, cuts=CUTS, tier_set=tier_set, hp=DEFAULTS, genres=genres)
+    found = queue.candidates(
+        items, cuts=CUTS, tier_set=tier_set, hp=DEFAULTS, genres=genres, terms=terms
+    )
     return {c.title_id: c for c in found}
 
 
@@ -499,6 +507,125 @@ def test_a_pairs_reason_names_its_steps_lower_first_and_the_rarest_genre_both_sh
     assert queue.why(bare[1], bare[3], ("bad", "ok", "good"), "movie") == (
         "One in bad, one in good · both crime films"
     )
+
+
+def test_the_reason_names_the_strongest_shared_term_and_the_rarest_shared_genre():
+    """Decision 564: term then genre, either alone, or the steps alone when nothing is shared."""
+    terms = {
+        1: {"pace.slow_burn": (2.0, 0.9, "slow-burn"), "theme.heist": (1.0, 0.9, "heist")},
+        2: {"pace.slow_burn": (2.0, 0.8, "slow-burn"), "theme.heist": (1.0, 0.9, "heist")},
+        3: {"theme.heist": (1.0, 0.5, "heist")},
+        4: {"theme.space": (1.5, 0.9, "space")},
+    }
+    genres = {1: ("Sci-Fi",), 2: ("Sci-Fi",), 3: ("Crime",), 4: ("Crime",)}
+    by_id = _tagged({1: 4, 2: 5, 3: 3, 4: 3}, genres, terms=terms)
+    assert queue.why(by_id[1], by_id[2], TIER_SET, "movie") == (
+        "One in A, one in S · both slow-burn sci-fi films"
+    )
+    assert queue.why(by_id[1], by_id[3], TIER_SET, "movie") == "One in B, one in A · both heist films"
+    assert queue.why(by_id[3], by_id[4], TIER_SET, "movie") == "Both in B · both crime films"
+    assert queue.why(by_id[2], by_id[4], TIER_SET, "movie") == "One in B, one in S"
+
+
+def _placed_board(shown, *, stale=None, since=None, terms=None):
+    """Titles shown in the given steps (a placement each), all settled at s = 0."""
+    items = [
+        board.Item(title_id=t, name=f"T{t}", s=0.0, sigma=1e-6, assigned_tier=tier)
+        for t, tier in shown.items()
+    ]
+    placed = {t: ((stale or {}).get(t, 0.0), (since or {}).get(t, 0)) for t in shown}
+    return queue.candidates(
+        items, cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS, placed=placed, terms=terms
+    )
+
+
+def test_a_cross_tier_partner_is_shown_two_or_more_steps_away_the_smallest_gap_first():
+    pool_ = _placed_board({1: 5, 2: 4, 3: 3, 4: 3, 5: 0})
+    by_id = {c.title_id: c for c in pool_}
+    rng = random.Random(4)
+    gaps = Counter()
+    for _ in range(2_000):
+        pair = queue._cross_tier(pool_, rng)
+        a, b = by_id[pair.title_a], by_id[pair.title_b]
+        gap = abs(a.shown - b.shown)
+        assert gap >= queue.CROSS_MIN_GAP
+        nearest_far = min(
+            abs(c.shown - a.shown) for c in pool_ if abs(c.shown - a.shown) >= queue.CROSS_MIN_GAP
+        )
+        assert gap == nearest_far, "the smallest qualifying gap goes first"
+        gaps[gap] += 1
+    assert pair.arm == queue.ARM_CROSS
+    # S and B meet two steps apart; E reaches B at three; A only E, four away.
+    assert set(gaps) == {2, 3, 4}
+
+    adjacent = _placed_board({1: 5, 2: 4})
+    assert queue._cross_tier(adjacent, rng) is None
+    arms = Counter(queue.draw(adjacent, rng=random.Random(s)).arm for s in range(400))
+    assert arms[queue.ARM_CROSS] == 0, "no two-step pair: the arm falls through and says so"
+
+
+def test_a_stale_placement_is_favoured_and_a_checked_one_waits():
+    shown = {1: 5, 2: 5, 3: 3, 4: 3}
+    pool_ = _placed_board(shown, stale={1: 90.0}, since={2: 3})
+    assert [queue.cross_weight(c) for c in pool_] == [4.0, 0.25, 1.0, 1.0]
+    rng = random.Random(8)
+    anchors = Counter(queue._cross_tier(pool_, rng).title_a for _ in range(6_000))
+    assert anchors[1] > anchors[3] > anchors[2]
+    assert anchors[1] / 6_000 == pytest.approx(4.0 / 6.25, abs=0.04)
+
+
+def test_likeness_reads_the_dna_cosine_the_coordinate_and_the_genres():
+    items = [board.Item(title_id=t, name=f"T{t}", s=0.0, sigma=1e-6) for t in (1, 2, 3)]
+    found = queue.candidates(
+        items, cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS,
+        terms={1: {"a": (1.0, 1.0, "a")}, 2: {"a": (1.0, 1.0, "a")}, 3: {"b": (1.0, 1.0, "b")}},
+        embeddings={1: np.array([1.0, 0.0]), 2: np.array([0.0, 2.0]), 3: np.array([-1.0, 0.0])},
+        genres={1: ("Crime", "Drama"), 2: ("Crime",)},
+    )
+    one, two, three = found
+    assert queue.likeness(one, two) == pytest.approx((1.0 + 0.0 + 0.5) / 3)
+    # The coordinate's cosine is floored at 0; no genre on 3, so two signals.
+    assert queue.likeness(one, three) == pytest.approx(0.0)
+    assert queue.likeness(two, three) == pytest.approx(0.0)
+
+
+def test_a_round_rests_every_title_after_two_appearances():
+    """Decision 564: across a simulated round no title is served in more than `ROUND_CAP` adaptive
+    pairs, though the boundary arm's weight would keep the top straddlers coming."""
+    candidates = pool()
+    rng = random.Random(21)
+    lately: list[tuple[int, int]] = []
+    asked: set[frozenset[int]] = set()
+    for _ in range(queue.EXPOSURE_WINDOW):
+        while True:
+            pair = queue.draw(
+                candidates, rng=rng, asked=asked,
+                recent={t for p in lately[: queue.RECENT_WINDOW] for t in p},
+                exposure=Counter(t for p in lately for t in p),
+            )
+            if pair.arm != queue.ARM_HOLDOUT:
+                break
+        lately.insert(0, (pair.title_a, pair.title_b))
+        asked.add(frozenset(lately[0]))
+    seen = Counter(t for p in lately for t in p)
+    assert max(seen.values()) <= queue.ROUND_CAP, seen
+
+
+def test_the_held_out_arm_reads_nothing_adaptive():
+    """§13: asked pairs, rest, likeness and staleness never touch the held-out draw."""
+    plain = pool(n=8, sigma=0.35)
+    decorated = queue.candidates(
+        [c.item for c in plain], cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS,
+        terms={i: {f"t{i % 2}": (1.0, 1.0, "x")} for i in range(1, 9)},
+        embeddings={i: np.array([1.0, float(i)]) for i in range(1, 9)},
+        placed={i: (30.0 * i, i % 3) for i in range(1, 9)},
+    )
+    reads = {"asked": {frozenset((1, 2))}, "recent": {3, 4}, "exposure": {5: 2}}
+    for seed in range(400):
+        a = queue.draw(plain, rng=random.Random(seed))
+        b = queue.draw(decorated, rng=random.Random(seed), **reads)
+        if queue.ARM_HOLDOUT in (a.arm, b.arm):
+            assert (a.arm, a.title_a, a.title_b) == (b.arm, b.title_a, b.title_b)
 
 
 def test_a_re_ask_comes_about_one_draw_in_ten_and_only_while_both_titles_are_on_the_board():

@@ -31,8 +31,8 @@ def fixture_embeddings(title_ids):
     return np.stack([_embedding(t) for t in ids]), np.ones(len(ids), dtype=bool)
 
 
-# The first number `queue.draw` reads, per arm: `SHARES` walks 0.70 / 0.90 / 1.00 cumulatively.
-BOUNDARY_ROLL, EXPLORATION_ROLL, HOLDOUT_ROLL = 0.10, 0.80, 0.95
+# The first number `queue.draw` reads, per arm: `SHARES` walks 0.50 / 0.75 / 0.90 / 1.00 cumulatively.
+BOUNDARY_ROLL, CROSS_ROLL, EXPLORATION_ROLL, HOLDOUT_ROLL = 0.10, 0.60, 0.80, 0.95
 
 # Decision 550's reason: the steps, lower first, and at most one shared genre.
 REASON = re.compile(r"(Both in \S+|One in \S+, one in \S+)( · both [a-z ]+ (films|series))?")
@@ -1088,6 +1088,7 @@ async def test_every_rank_write_waits_for_the_set_up_and_the_board_stays_readabl
         ("post", "/api/rank/place", {"title_id": 1, "kind": "movie"}),
         ("post", "/api/rank/place/answer", {"token": "x", "outcome": "A"}),
         ("post", "/api/rank/place/skip", {"token": "x"}),
+        ("post", "/api/rank/queue/settle?kind=movie", None),
     ):
         refused = await getattr(other, method)(path, **({"json": body} if body else {}))
         assert refused.status_code == 409, f"{method.upper()} {path}: {refused.text}"
@@ -1200,3 +1201,102 @@ async def test_a_sharpen_pair_answered_three_days_ago_comes_back_as_a_silent_re_
     later = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
     _body, row = await _answered_row(client, db, user_id, later["token"])
     assert not row["is_reask"], "re-asked once, the pair rests for its cooldown"
+
+
+async def _placed_far_off(db, client, user_id: int, *, title_id: int = 1, tier: int = 1, answers=2,
+                          selection: str = "boundary", is_reask: bool = False) -> int:
+    """Places the title, then answers about it, then sets its posterior far above the step."""
+    placed = await client.post("/api/rank/drop?kind=movie", json={"title_id": title_id, "tier": tier})
+    assert placed.status_code == 200, placed.text
+    for partner in (2, 3, 4, 5, 6)[:answers]:
+        await observations.record_duel(
+            db, user_id=user_id, title_a=title_id, title_b=partner, outcome="A",
+            context="tier_queue", selection=selection, decisive=False, hp=DEFAULTS,
+            is_reask=is_reask,
+        )
+    await db.execute(
+        "UPDATE ledger_state SET s = 5.0, sigma = 0.1, sigma_eff = 0.1 "
+        "WHERE user_id = $1 AND title_id = $2",
+        user_id,
+        title_id,
+    )
+    return placed.json()["tier_edit_id"]
+
+
+async def test_settle_moves_a_title_its_answers_place_elsewhere_once_and_undo_takes_it_back(
+    db, ranked
+):
+    """Decision 564: a `sharpen` edit plus the class verdict, listed for the round's end; a second
+    settle moves nothing; Undo is a drop back that the gate counts from afresh."""
+    client, user_id = ranked
+    await _placed_far_off(db, client, user_id)
+    settled = await client.post("/api/rank/queue/settle?kind=movie&per_tier=2")
+    assert settled.status_code == 200, settled.text
+    body = settled.json()
+    [move] = body["moves"]
+    assert {k: move[k] for k in ("title_id", "name", "from", "to", "from_label", "to_label")} == {
+        "title_id": 1, "name": "Title 1", "from": 1, "to": 5, "from_label": "D", "to_label": "S",
+    }
+    edit = await db.fetchrow(
+        "SELECT id, tier, via FROM tier_edit WHERE user_id = $1 ORDER BY id DESC LIMIT 1", user_id
+    )
+    assert (edit["id"], edit["tier"], edit["via"]) == (move["tier_edit_id"], 5, "sharpen")
+    verdict = await db.fetchrow(
+        "SELECT value, source FROM verdict WHERE user_id = $1 AND title_id = 1 ORDER BY id DESC LIMIT 1",
+        user_id,
+    )
+    assert (verdict["value"], verdict["source"]) == (2, "tier")
+    shown = {e["title_id"]: tier["index"] for tier in body["tiers"] for e in tier["entries"]}
+    assert shown[1] == 5, "the board comes back with the move on it"
+    assert "log" not in body, "the rail line is behind the gate"
+
+    again = await client.post("/api/rank/queue/settle?kind=movie")
+    assert again.json()["moves"] == []
+    assert await db.fetchval(
+        "SELECT count(*) FROM tier_edit WHERE user_id = $1 AND via = 'sharpen'", user_id
+    ) == 1
+
+    undone = await client.post(
+        "/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 1, "undoes": move["tier_edit_id"]}
+    )
+    assert undone.status_code == 200, undone.text
+    await db.execute("UPDATE ledger_state SET s = 5.0, sigma_eff = 0.1 WHERE user_id = $1 AND title_id = 1",
+                     user_id)
+    assert (await client.post("/api/rank/queue/settle?kind=movie")).json()["moves"] == []
+
+
+@pytest.mark.parametrize(
+    ("selection", "is_reask", "answers"),
+    [("uniform_holdout", False, 3), ("boundary", True, 3), ("cross_tier", False, 1)],
+)
+async def test_settle_counts_neither_held_out_answers_nor_re_asks_and_waits_for_two(
+    db, ranked, selection, is_reask, answers
+):
+    client, user_id = ranked
+    await _placed_far_off(db, client, user_id, answers=answers, selection=selection, is_reask=is_reask)
+    assert (await client.post("/api/rank/queue/settle?kind=movie")).json()["moves"] == []
+
+
+async def test_a_drop_cannot_claim_to_be_a_sharpen_move(db, ranked):
+    client, user_id = ranked
+    refused = await client.post(
+        "/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 5, "via": "sharpen"}
+    )
+    assert refused.status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", user_id) == 0
+
+
+async def test_a_cross_tier_pair_is_served_and_stored_under_its_arm(db, ranked, monkeypatch):
+    client, user_id = ranked
+    await client.post("/api/auth/preferences", json={"show_model": True})
+    for title_id, tier in ((1, 5), (2, 1)):
+        await client.post("/api/rank/drop?kind=movie", json={"title_id": title_id, "tier": tier})
+    _arm(monkeypatch, CROSS_ROLL)
+    pair = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+    assert pair["model"]["arm"] == queue.ARM_CROSS
+    assert REASON.fullmatch(pair["reason"]), pair["reason"]
+    answered = await client.post("/api/rank/queue/answer", json={"pair": pair["token"], "outcome": "A"})
+    assert answered.status_code == 200, answered.text
+    assert await db.fetchval(
+        "SELECT selection FROM duel WHERE user_id = $1 ORDER BY id DESC LIMIT 1", user_id
+    ) == queue.ARM_CROSS

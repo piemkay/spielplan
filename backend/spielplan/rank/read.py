@@ -16,15 +16,18 @@ import numpy as np
 
 from spielplan.db import genres as genre_vocab
 from spielplan.db.library import RankFilters, rank_filters
+from spielplan.home import why
 from spielplan.ledger import ladder
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.observations import (
     DEFAULT_TIER_SET,
     HELD_OUT,
+    EmbeddingSource,
     cutover_sql,
     latest_tier_edit_sql,
     live_label_sql,
     rescale_level,
+    resolve_embeddings,
 )
 from spielplan.rank import board, queue
 
@@ -200,6 +203,50 @@ async def recent_titles(
     return {int(r[side]) for r in rows for side in ("title_a", "title_b")}
 
 
+async def recent_pairs(
+    conn: asyncpg.Connection, *, user_id: int, kind: str, window: int = queue.EXPOSURE_WINDOW
+) -> list[tuple[int, int]]:
+    """This person's last `window` adaptive Sharpen pairs, newest first, across sittings: re-asks in,
+    **held-out excluded** (decision 564's rest rule)."""
+    rows = await conn.fetch(
+        f"""
+        SELECT d.title_a, d.title_b FROM duel d
+        JOIN title t ON t.id = d.title_a AND t.kind = $2
+        WHERE d.user_id = $1 AND d.context = 'tier_queue' AND d.selection <> $3
+          AND d.created_at >= {cutover_sql()}
+        ORDER BY d.id DESC
+        LIMIT $4
+        """,
+        user_id,
+        kind,
+        HELD_OUT,
+        window,
+    )
+    return [(int(r["title_a"]), int(r["title_b"])) for r in rows]
+
+
+async def since_placement(
+    conn: asyncpg.Connection, *, user_id: int, kind: str
+) -> dict[int, tuple[float, int]]:
+    """Per placed title: days since its latest placement, and the Sharpen answers involving it since
+    (not held out, not a re-ask). **Held-out excluded**: a selector input and the move gate."""
+    rows = await conn.fetch(
+        f"""
+        SELECT e.title_id, extract(epoch FROM now() - e.created_at) / 86400.0 AS days,
+               (SELECT count(*) FROM duel d
+                 WHERE d.user_id = $1 AND d.context = 'tier_queue' AND d.selection <> $3
+                   AND NOT d.is_reask AND d.created_at > e.created_at
+                   AND e.title_id IN (d.title_a, d.title_b)) AS answers
+          FROM ({latest_tier_edit_sql()}) e
+          JOIN title t ON t.id = e.title_id AND t.kind = $2
+        """,
+        user_id,
+        kind,
+        HELD_OUT,
+    )
+    return {int(r["title_id"]): (max(float(r["days"]), 0.0), int(r["answers"])) for r in rows}
+
+
 async def comparisons_since_setup(conn: asyncpg.Connection, *, user_id: int, kind: str) -> int:
     """Sharpen's and Place's answers of the kind since the cut-over, held-out in and re-asks out:
     what "still mostly our guess" counts (decision 550)."""
@@ -346,17 +393,28 @@ async def candidates(
     kind: str,
     hp: Hyperparams,
     rows: Sequence[board.Item] | None = None,
+    embeddings: EmbeddingSource | None = None,
 ) -> list[queue.Candidate]:
-    """The queue's pool: the whole rated board, unfiltered (filters only change the view)."""
+    """The queue's pool: the whole rated board, unfiltered (filters only change the view), with what
+    likeness reads (decision 564)."""
     cuts = await cutpoints_of(conn, user_id=user_id, kind=kind)
     pool = list(rows) if rows is not None else await items(conn, user_id=user_id, kind=kind)
+    ids = [item.title_id for item in pool]
+    version = await why.vocabulary_version(conn)
+    vectors: dict[int, np.ndarray] = {}
+    if embeddings is not None and ids:
+        matrix, embedded = await resolve_embeddings(embeddings, ids)
+        vectors = {t: matrix[i] for i, t in enumerate(ids) if embedded[i]}
     return queue.candidates(
         pool,
         cuts=cuts.boundaries,
         tier_set=cuts.tier_set,
         hp=hp,
         comparisons=await comparison_counts(conn, user_id=user_id, kind=kind),
-        genres=await genres_of(conn, [item.title_id for item in pool]),
+        genres=await genres_of(conn, ids),
+        terms={} if version is None else await why.term_vectors(conn, ids, kind=kind, version=version),
+        embeddings=vectors,
+        placed=await since_placement(conn, user_id=user_id, kind=kind),
     )
 
 
@@ -411,6 +469,8 @@ __all__ = [
     "placements",
     "public",
     "reask_pairs",
+    "recent_pairs",
     "recent_titles",
+    "since_placement",
     "standing",
 ]
