@@ -35,7 +35,7 @@ def fixture_embeddings(title_ids):
 BOUNDARY_ROLL, CROSS_ROLL, EXPLORATION_ROLL, HOLDOUT_ROLL = 0.10, 0.60, 0.80, 0.95
 
 # Decision 550's reason: the steps, lower first, and at most one shared genre.
-REASON = re.compile(r"(Both in \S+|One in \S+, one in \S+)( · both [a-z ]+ (films|series))?")
+REASON = re.compile(r"(Both in \S+|One in \S+, one in \S+)( · both [^·]+( · [^·]+)?)?")
 
 
 class _Armed(random.Random):
@@ -1289,7 +1289,7 @@ async def test_a_drop_cannot_claim_to_be_a_sharpen_move(db, ranked):
 async def test_a_cross_tier_pair_is_served_and_stored_under_its_arm(db, ranked, monkeypatch):
     client, user_id = ranked
     await client.post("/api/auth/preferences", json={"show_model": True})
-    for title_id, tier in ((1, 5), (2, 1)):
+    for title_id, tier in ((1, 5), (2, 2)):
         await client.post("/api/rank/drop?kind=movie", json={"title_id": title_id, "tier": tier})
     _arm(monkeypatch, CROSS_ROLL)
     pair = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]

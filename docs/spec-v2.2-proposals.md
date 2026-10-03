@@ -17017,8 +17017,9 @@ moves, and the round's end lists the moves with Undo.
 1. The queue's arms are boundary 50%, cross-tier check 25%, exploration 15% and held out 10%
    (migration 0051_sharpen adds `cross_tier` to `duel.selection`). The cross-tier check draws its
    anchor from the whole board, weighted toward a placement that is old and little asked since,
-   and pairs it with a title whose shown step is two or more away, the gap drawn as a uniform
-   pair's gap would be, so the gap tells nothing about the arm. It falls back to boundary, then
+   and pairs it with a title whose shown step is two or three away, the gap drawn as a uniform
+   pair's gap of two or three would be, so such a gap tells nothing about the arm; wider pairs,
+   which settle nothing, are left to the held-out tenth. It falls back to boundary, then
    exploration; the held-out arm never falls back and never receives.
 2. Each adaptive arm prefers a partner in the anchor's top quarter of likeness (shared DNA terms,
    embedding, genre); the reason line names the steps and the strongest shared term or genre.

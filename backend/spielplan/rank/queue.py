@@ -49,6 +49,8 @@ ROUND_CAP = 2
 # Decision 564: a cross-tier partner is shown this many steps from the anchor or more; an anchor's
 # weight grows by one every `STALE_DAYS` since its placement.
 CROSS_MIN_GAP = 2
+# Wider pairs (an S film against an E one) settle nothing the person does not already know.
+CROSS_MAX_GAP = 3
 STALE_DAYS = 30.0
 
 # Decision 564: partners in the anchor's own top quarter by likeness are offered first.
@@ -193,7 +195,7 @@ def _strongest_term(a: Candidate, b: Candidate) -> str | None:
 def why(a: Candidate, b: Candidate, tier_set: Sequence[str], kind: str) -> str:
     """A pair's reason, the same form on every arm (decision 550): the steps the board shows the two
     in, lower first, then the strongest shared term and the rarest shared genre.
-    "One in A, one in S · both slow-burn sci-fi films"."""
+    "One in A, one in S · both science fiction films · slow-burn"."""
     low, high = sorted(rescale_level(c.shown, k_from=None, k_to=len(tier_set)) for c in (a, b))
     steps = (
         f"Both in {tier_set[low]}"
@@ -202,10 +204,11 @@ def why(a: Candidate, b: Candidate, tier_set: Sequence[str], kind: str) -> str:
     )
     genre = next((g.lower() for g in a.genres if g in b.genres), None)
     term = _strongest_term(a, b)
-    words = [w for w in (term, genre) if w]
-    if term and genre and term.lower() == genre:
-        words = [genre]
-    return f"{steps} · both {' '.join(words)} {NOUNS[kind]}" if words else steps
+    if term and genre and term.lower() != genre:
+        return f"{steps} · both {genre} {NOUNS[kind]} · {term}"
+    if genre:
+        return f"{steps} · both {genre} {NOUNS[kind]}"
+    return f"{steps} · both {term}" if term else steps
 
 
 def _jitter(pool: Iterable[Candidate], rng: random.Random) -> dict[int, float]:
@@ -326,7 +329,7 @@ def _cross_tier(
     recent: Iterable[int] | None = None,
     exposure: Mapping[int, int] | None = None,
 ) -> Pair | None:
-    """25%: a gap of `CROSS_MIN_GAP` or more steps, drawn as a uniform pair's gap would be so the gap
+    """25%: a gap of `CROSS_MIN_GAP` to `CROSS_MAX_GAP` steps, drawn as a uniform pair's gap would be so the gap
     tells nothing about the arm, then a title weighted by `cross_weight` against one that far (decision
     564)."""
     already = {frozenset(p) for p in (asked or ())}
@@ -336,7 +339,7 @@ def _cross_tier(
     pairs_at = Counter()
     for low, n_low in steps.items():
         for high, n_high in steps.items():
-            if high - low >= CROSS_MIN_GAP:
+            if CROSS_MIN_GAP <= high - low <= CROSS_MAX_GAP:
                 pairs_at[high - low] += n_low * n_high
     for gap in sorted(pairs_at, key=lambda g: -(rng.random() ** (1.0 / pairs_at[g]))):
         reach = [c for c in pool if steps[c.shown - gap] or steps[c.shown + gap]]
@@ -479,6 +482,7 @@ __all__ = [
     "ARM_EXPLORATION",
     "ARM_HOLDOUT",
     "ARM_REASK",
+    "CROSS_MAX_GAP",
     "CROSS_MIN_GAP",
     "EXPOSURE_WINDOW",
     "K_NEAREST",

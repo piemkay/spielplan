@@ -520,9 +520,9 @@ def test_the_reason_names_the_strongest_shared_term_and_the_rarest_shared_genre(
     genres = {1: ("Sci-Fi",), 2: ("Sci-Fi",), 3: ("Crime",), 4: ("Crime",)}
     by_id = _tagged({1: 4, 2: 5, 3: 3, 4: 3}, genres, terms=terms)
     assert queue.why(by_id[1], by_id[2], TIER_SET, "movie") == (
-        "One in A, one in S · both slow-burn sci-fi films"
+        "One in A, one in S · both sci-fi films · slow-burn"
     )
-    assert queue.why(by_id[1], by_id[3], TIER_SET, "movie") == "One in B, one in A · both heist films"
+    assert queue.why(by_id[1], by_id[3], TIER_SET, "movie") == "One in B, one in A · both heist"
     assert queue.why(by_id[3], by_id[4], TIER_SET, "movie") == "Both in B · both crime films"
     assert queue.why(by_id[2], by_id[4], TIER_SET, "movie") == "One in B, one in S"
 
@@ -540,7 +540,8 @@ def _placed_board(shown, *, stale=None, since=None, terms=None):
 
 
 def test_a_cross_tier_gap_is_drawn_as_a_uniform_pairs_gap_would_be():
-    """§13: were the gap always the smallest, every pair three or more steps apart would be held out."""
+    """§13: were the gap always the smallest, every pair three steps apart would be held out; wider
+    pairs are left to the held-out arm, which settle nothing the person does not know."""
     shown = dict(enumerate((0, 0, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5), start=1))
     pool_ = _placed_board(shown)
     by_id = {c.title_id: c for c in pool_}
@@ -550,12 +551,12 @@ def test_a_cross_tier_gap_is_drawn_as_a_uniform_pairs_gap_would_be():
         pair = queue._cross_tier(pool_, rng)
         gaps[abs(by_id[pair.title_a].shown - by_id[pair.title_b].shown)] += 1
     assert pair.arm == queue.ARM_CROSS
-    assert min(gaps) >= queue.CROSS_MIN_GAP and gaps[3] and gaps[4] and gaps[5]
+    assert set(gaps) == {2, 3}
     held = Counter()
     for _ in range(20_000):
         pair = queue._holdout(pool_, rng)
         gap = abs(by_id[pair.title_a].shown - by_id[pair.title_b].shown)
-        if gap >= queue.CROSS_MIN_GAP:
+        if queue.CROSS_MIN_GAP <= gap <= queue.CROSS_MAX_GAP:
             held[gap] += 1
     for gap in held:
         assert gaps[gap] / gaps.total() == pytest.approx(held[gap] / held.total(), abs=0.05)
