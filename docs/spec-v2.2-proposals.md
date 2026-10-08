@@ -17174,6 +17174,9 @@ offline bench is what should decide whether this head keeps its place.
 
 ### 569. A film's era is measured against the band of years the member's own good placements sit in
 
+**Retired by decision 571 (2026-10-08): measured on production, the band made the drift it was
+introduced to fix worse, and the hinge never learned the sign this decision assumes.**
+
 **What the record says.** Nothing in the score knew when a film was made. Ranking the unowned pool
 by `cf` gave Patrick a top 40 averaging 1991 against a pool averaging 2001, and adding the film's
 facts moved the error rather than removing it: quality rose from 7.36 to 8.02 while the mean year
@@ -17237,6 +17240,55 @@ The spec is amended in place (v2.1.22): §5.1.
 **Cost.** One cosine over the shared columns and one Spearman over the scores, both read from rows
 that already exist. No new surface: this decision provides the number and names nothing that shows
 it, which is a later milestone's call.
+
+## Decisions taken (owner, 2026-10-08, after deploying the content head)
+
+### 571. The era band is removed: it was measured on production and it made the drift worse
+
+**What the record says.** Decision 569 added two hinges against a band of years measured from a
+member's own good placements, to stop a shelf drifting into old cinema, and §5.1 says they let a
+member "refuse everything older than their band". It shipped in 0052 and was deployed on 2026-10-08.
+
+**Why it changes.** The claim was never measured against the thing it was introduced for. Reading
+the live fits an hour after the deploy, `era:older` was **+0.067** for Patrick and +0.021 for Jenny:
+positive, so older than the band *raised* the score, and both an order of magnitude below
+`people:affinity` (+1.21) and `crowd:cf` (+0.60). Patrick's top owned unseen films were still Kill
+Bill, The Empire Strikes Back, Return of the Jedi, Raiders and Nausicaä.
+
+Four designs over the same labels and the same folds, each scored on held-out top-band agreement and
+on the mean year of the top forty of the pool a shelf draws from:
+
+| design | Patrick agreement | Patrick top-40 year | Jenny agreement | Jenny top-40 year |
+|---|---|---|---|---|
+| decades + hinges (what 0052 shipped) | 0.918 | 1998 | 0.863 | 2005 |
+| hinges only | 0.931 | 2000 | 0.857 | 2005 |
+| decades only | 0.925 | 2001 | 0.864 | 2006 |
+| no year feature at all | 0.929 | 2001 | 0.863 | 2006 |
+
+The block it was introduced to improve is **three years older** with the hinges than without them,
+at slightly worse agreement. Two things explain it. The hinges are collinear with the eleven decade
+one-hots in the same design, so no single coefficient's sign could be read in the first place; and
+with the decades removed, `older` settles at **+0.001** — the fit never finds "older is worse". What
+it does find is `newer` at −0.185, which is a true pattern for a member who placed a run of 2026
+releases at C and D, and no answer at all to the drift.
+
+**The decision.**
+1. Decision 569 is retired. The era band, both hinges, the unknown-year flag and the two stored
+   scalars are removed; `0053_no_era_band.sql` drops the columns, because a column nothing writes
+   would claim a measure the model does not have.
+2. The decade one-hots stay. They cost nothing, read the same for every member, and carry whatever
+   the release year is worth — which on this evidence is close to nothing, and that is worth knowing.
+3. `FEATURES_VERSION` becomes `content-2`, so every stored fit is refitted rather than reinterpreted
+   under a layout it was not built in. The member-relative tail is now the person affinity and `cf`.
+4. The drift decision 569 was aimed at is **still open**. It is a property of the candidate pool and
+   of survivorship in what a member has rated, not of a missing year column, and nothing here
+   addresses it. Decision 567's vote floor remains the only thing holding it back.
+
+The spec is amended in place (v2.1.23): §4.2, §5.1.
+
+**Cost.** One migration, three fewer columns, one bump of the feature version and a refit. The honest
+cost is the lesson: 569 was reasoned from a mechanism and shipped without measuring the mechanism,
+and the measurement took one afternoon and contradicted it.
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 

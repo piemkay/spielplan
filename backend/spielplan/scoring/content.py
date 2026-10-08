@@ -3,8 +3,8 @@
     score_u(t) = μ_u + (1−w_u)·[(1−β_u)·z(b(t)) + β_u·⟨v_u, d(t)⟩] + w_u·con_u(t)
 
 The first two terms are `foldin`'s and are untouched. `con_u` is a ridge over one shared feature
-space: the DNA vocabulary, canonical genre, decade, the era measure below, a few meta columns, the
-crowd prior, the platform score, how much the member likes the people who made it, and `cf` itself.
+space: the DNA vocabulary, canonical genre, decade, a few meta columns, the crowd prior, the
+platform score, how much the member likes the people who made it, and `cf` itself.
 Until this head existed the personal score read a 64-d crowd coordinate and nothing about the film,
 so the imported DNA could say "this is like that" and never "you will like this".
 
@@ -57,16 +57,6 @@ CV_REPEATS = 6
 MIN_LABELS_FOR_CV = 8   # below this the design is fitted but never trusted with weight
 LOO_BELOW = 25          # leave-one-out under this many labels, 5 folds at or above, as §5.1 does
 
-# --- the era measure (decision 569) ------------------------------------------------------------
-# A member's own good placements sit in a band of years. The half-width is floored so a member whose
-# first ratings happen to share a decade does not get an implausibly sharp rule, and the hinges are
-# capped so a 1920s film cannot dominate a solve by magnitude alone.
-ERA_MIN_LABELS = 5
-ERA_MIN_SPREAD = 8.0
-ERA_MAX_HINGE = 4.0
-ERA_NO_BAND = 1.0e6     # a spread this wide flattens both hinges: no era measured, nothing guessed
-MAD_TO_SD = 1.4826      # a normal distribution's sd from its median absolute deviation
-
 # Role weights for the people column. Who directed it carries most: on this household's own
 # placements a director with two or more films predicts the step better than any other credit.
 ROLE_WEIGHT: dict[str, float] = {"director": 3.0, "writer": 1.5, "composer": 1.0, "dp": 1.0}
@@ -76,33 +66,11 @@ PERSON_PRIOR = 2.0      # empirical-Bayes denominator: one film by one director 
 DECADES: tuple[int, ...] = (1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020)
 
 # Stamped on every fit; a fit carrying another value reads as absent rather than being served.
-FEATURES_VERSION = "content-1"
+FEATURES_VERSION = "content-2"
 
 # The member-relative tail of the design, always last and always in this order. These are the
 # columns whose meaning depends on whose fit it is, so `match` leaves them out.
-MEMBER_KEYS: tuple[str, ...] = (
-    "era:older", "era:newer", "era:unknown", "people:affinity", "crowd:cf",
-)
-
-
-@dataclass(frozen=True)
-class Era:
-    """Where a member's own good placements sit in time, in years (decision 569)."""
-
-    centre: float
-    spread: float
-    used: int = 0
-
-    @property
-    def measured(self) -> bool:
-        return self.spread < ERA_NO_BAND
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "centre": round(self.centre, 1),
-            "spread": round(self.spread, 1) if self.measured else None,
-            "used": self.used,
-        }
+MEMBER_KEYS: tuple[str, ...] = ("people:affinity", "crowd:cf")
 
 
 @dataclass(frozen=True)
@@ -136,7 +104,6 @@ class Features:
     layout: Layout
     title_ids: np.ndarray                      # (n,) int64, ascending
     x: np.ndarray                              # (n, member_from) float64, title columns only
-    years: np.ndarray                          # (n,) float64, NaN where the year is unknown
     people: Mapping[int, Sequence[tuple[int, float]]] = field(default_factory=dict)
     row_of: Mapping[int, int] = field(default_factory=dict)
 
@@ -149,7 +116,6 @@ class Fit:
     """One (user, kind) content head."""
 
     w: np.ndarray            # (width,) float64, already divided by con_sd
-    era: Era
     weight: float            # w_u: how much of the score this head carries
     lam: float
     cv_rho: float            # held-out top-band agreement of the blended score at (λ, w)
@@ -170,7 +136,7 @@ class Fit:
         return {
             "weight": self.weight, "lambda": self.lam, "cv_rho": round(self.cv_rho, 4),
             "base_rho": round(self.base_rho, 4), "gain": round(self.gain, 4),
-            "con_sd": self.con_sd, "era": self.era.as_dict(), "digest": self.digest,
+            "con_sd": self.con_sd, "digest": self.digest,
             "label_count": self.label_count, "used": self.used, "dropped": self.dropped,
             "folds": self.folds,
         }
@@ -205,54 +171,6 @@ def layout_for(terms: Sequence[str], genres: Sequence[str]) -> Layout:
     keys += ["meta:runtime", "meta:english", "meta:votes", "meta:platform", "crowd:prior"]
     keys += list(MEMBER_KEYS)
     return Layout(keys=tuple(keys))
-
-
-def _weighted_median(values: np.ndarray, weight: np.ndarray) -> float:
-    order = np.argsort(values, kind="mergesort")
-    v, cw = values[order], np.cumsum(weight[order])
-    if cw[-1] <= 0.0:
-        return float(np.median(values))
-    return float(v[int(np.searchsorted(cw, cw[-1] / 2.0))])
-
-
-def era_of(years: np.ndarray, steps: np.ndarray, *, fallback: float) -> Era:
-    """The band of years a member's own above-average placements sit in (decision 569).
-
-    Weighted by how far above their own mean a placement sits: a film they put below their own
-    average says nothing about the era they seek out. Median, not mean, so one outlying favourite
-    cannot drag the centre across a decade.
-    """
-    y = np.asarray(years, dtype=np.float64)
-    s = np.asarray(steps, dtype=np.float64)
-    known = ~np.isnan(y)
-    if int(known.sum()) < ERA_MIN_LABELS:
-        return Era(centre=fallback, spread=ERA_NO_BAND, used=int(known.sum()))
-    y, s = y[known], s[known]
-    weight = np.clip(s - s.mean(), 0.0, None)
-    if weight.sum() <= 0.0:                     # every placement identical: no band to measure
-        return Era(centre=fallback, spread=ERA_NO_BAND, used=int(y.size))
-    centre = _weighted_median(y, weight)
-    spread = max(ERA_MIN_SPREAD, _weighted_median(np.abs(y - centre), weight) * MAD_TO_SD)
-    return Era(centre=float(centre), spread=float(spread), used=int(y.size))
-
-
-def era_columns(years: np.ndarray, era: Era) -> np.ndarray:
-    """(n, 3): how much older than the member's band, how much newer, and whether the year is known.
-
-    Two hinges rather than one distance, because the two directions are not the same question: a
-    member can refuse everything older than their band and not care how much newer a film is. Two
-    coefficients learn that; ten decade columns, which this design also carries, do not learn it
-    sharply enough to survive a sparse DNA block beside them.
-    """
-    y = np.asarray(years, dtype=np.float64)
-    unknown = np.isnan(y)
-    if not era.measured:
-        # Exactly zero, not 1e-5 of something: no band measured means nothing guessed.
-        return np.column_stack([np.zeros(y.size), np.zeros(y.size), unknown.astype(np.float64)])
-    z = np.where(unknown, 0.0, (y - era.centre) / era.spread)
-    older = np.clip(-z, 0.0, ERA_MAX_HINGE)
-    newer = np.clip(z, 0.0, ERA_MAX_HINGE)
-    return np.column_stack([older, newer, unknown.astype(np.float64)])
 
 
 def person_affinity(
@@ -293,14 +211,12 @@ def design(
     features: Features,
     rows: np.ndarray,
     *,
-    era: Era,
     affinity: np.ndarray,
     cf: np.ndarray,
 ) -> np.ndarray:
     """The title columns for `rows`, with this member's tail appended in `MEMBER_KEYS` order."""
     return np.hstack([
         features.x[rows],
-        era_columns(features.years[rows], era),
         np.asarray(affinity, dtype=np.float64).reshape(-1, 1),
         np.asarray(cf, dtype=np.float64).reshape(-1, 1),
     ])
@@ -345,24 +261,20 @@ def fit_user(
     from spielplan.scoring.foldin import NOISE_FLOOR, spearman
 
     layout = features.layout
-    known = features.years[~np.isnan(features.years)]
-    fallback = float(np.median(known)) if known.size else float(DECADES[-1])
-
     ordered = sorted(labels, key=lambda pair: int(pair[0]))
     kept = [(int(t), float(step)) for t, step in ordered if int(t) in features.row_of]
     dropped = len(labels) - len(kept)
     n = len(kept)
     if n == 0:
         return Fit(
-            w=np.zeros(layout.width), era=Era(centre=fallback, spread=ERA_NO_BAND), weight=0.0,
-            lam=LAMBDA_GRID[-1], cv_rho=0.0, base_rho=0.0, con_sd=0.0, con_mean=0.0,
-            digest=layout.digest, label_count=len(labels), used=0, dropped=dropped,
+            w=np.zeros(layout.width), weight=0.0, lam=LAMBDA_GRID[-1], cv_rho=0.0, base_rho=0.0,
+            con_sd=0.0, con_mean=0.0, digest=layout.digest, label_count=len(labels), used=0,
+            dropped=dropped,
         )
 
     title_ids = [t for t, _s in kept]
     y_raw = np.asarray([s for _t, s in kept], dtype=np.float64)
     rows = features.rows(title_ids)
-    era = era_of(features.years[rows], y_raw, fallback=fallback)
 
     # Centred on the reference population, as §5.1's halves are, not on what the member rated: a
     # score must not depend on the filter the member has typed, and the centre must be one shared
@@ -371,7 +283,7 @@ def fit_user(
     ref_ids = [int(t) for t in features.title_ids]
     ref_affinity = person_affinity(features.people, kept, ref_ids)
     ref_cf = np.asarray([cf.get(t, 0.0) for t in ref_ids], dtype=np.float64)
-    ref_x = design(features, ref_rows, era=era, affinity=ref_affinity, cf=ref_cf)
+    ref_x = design(features, ref_rows, affinity=ref_affinity, cf=ref_cf)
     ref_x -= ref_x.mean(axis=0)
 
     x = ref_x[rows]
@@ -392,12 +304,12 @@ def fit_user(
     if con_sd < 1e-9:
         # The head orders nothing over the reference; say so with a weight of zero.
         return Fit(
-            w=np.zeros(layout.width), era=era, weight=0.0, lam=lam, cv_rho=base_rho,
+            w=np.zeros(layout.width), weight=0.0, lam=lam, cv_rho=base_rho,
             base_rho=base_rho, con_sd=0.0, con_mean=0.0, digest=layout.digest,
             label_count=len(labels), used=n, dropped=dropped, folds=folds,
         )
     return Fit(
-        w=w / con_sd, era=era, weight=weight, lam=lam, cv_rho=cv_rho, base_rho=base_rho,
+        w=w / con_sd, weight=weight, lam=lam, cv_rho=cv_rho, base_rho=base_rho,
         con_sd=con_sd, con_mean=float(raw.mean() / con_sd), digest=layout.digest,
         label_count=len(labels), used=n, dropped=dropped, folds=folds,
     )
@@ -530,7 +442,7 @@ def score_many(
         [cf.get(int(t), 0.0) for t in features.title_ids], dtype=np.float64
     )
     ref_rows = np.arange(features.title_ids.size)
-    ref_x = design(features, ref_rows, era=fit.era, affinity=affinity, cf=ref_cf)
+    ref_x = design(features, ref_rows, affinity=affinity, cf=ref_cf)
     con_ref = (ref_x - ref_x.mean(axis=0)) @ fit.w
 
     con = np.zeros(len(ids), dtype=np.float64)
@@ -629,20 +541,18 @@ async def build_features(
     if not ids:
         return Features(
             layout=layout, title_ids=np.zeros(0, dtype=np.int64),
-            x=np.zeros((0, layout.member_from)), years=np.zeros(0),
+            x=np.zeros((0, layout.member_from)),
         )
 
     row_of = {t: i for i, t in enumerate(ids)}
     col_of = {k: i for i, k in enumerate(layout.keys)}
     x = np.zeros((len(ids), layout.member_from), dtype=np.float64)
-    years = np.full(len(ids), np.nan, dtype=np.float64)
 
     for r in await conn.fetch(
         "SELECT id, year, runtime_min, original_language FROM title WHERE id = ANY($1::int[])", ids
     ):
         i = row_of[int(r["id"])]
         if r["year"] is not None:
-            years[i] = float(r["year"])
             decade = min(DECADES[-1], max(DECADES[0], (int(r["year"]) // 10) * 10))
             x[i, col_of[f"decade:{decade}"]] = 1.0
         if r["runtime_min"] is not None:
@@ -731,7 +641,7 @@ async def build_features(
         per_title[person] = max(per_title.get(person, 0.0), weight)
 
     return Features(
-        layout=layout, title_ids=np.asarray(ids, dtype=np.int64), x=x, years=years,
+        layout=layout, title_ids=np.asarray(ids, dtype=np.int64), x=x,
         people={t: tuple(sorted(d.items())) for t, d in best.items()}, row_of=row_of,
     )
 
@@ -757,24 +667,22 @@ async def write_fit(
         """
         INSERT INTO user_content_fit (
             user_id, kind, bundle_version, w, width, digest, features_version, weight,
-            content_lambda, con_sd, con_mean, cv_rho, base_rho, era_centre, era_spread, era_used,
+            content_lambda, con_sd, con_mean, cv_rho, base_rho,
             label_count, used, dropped, folds, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-                $19, $20, now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                now())
         ON CONFLICT (user_id, kind) DO UPDATE
            SET bundle_version = EXCLUDED.bundle_version, w = EXCLUDED.w, width = EXCLUDED.width,
                digest = EXCLUDED.digest, features_version = EXCLUDED.features_version,
                weight = EXCLUDED.weight, content_lambda = EXCLUDED.content_lambda,
                con_sd = EXCLUDED.con_sd, con_mean = EXCLUDED.con_mean, cv_rho = EXCLUDED.cv_rho,
-               base_rho = EXCLUDED.base_rho, era_centre = EXCLUDED.era_centre,
-               era_spread = EXCLUDED.era_spread, era_used = EXCLUDED.era_used,
+               base_rho = EXCLUDED.base_rho,
                label_count = EXCLUDED.label_count, used = EXCLUDED.used,
                dropped = EXCLUDED.dropped, folds = EXCLUDED.folds, updated_at = now()
         """,
         user_id, kind, bundle_version, pack(fit.w), width, fit.digest, FEATURES_VERSION,
         fit.weight, fit.lam, fit.con_sd, fit.con_mean, fit.cv_rho, fit.base_rho,
-        fit.era.centre, fit.era.spread, fit.era.used, fit.label_count, fit.used, fit.dropped,
-        fit.folds,
+        fit.label_count, fit.used, fit.dropped, fit.folds,
     )
 
 
@@ -784,7 +692,7 @@ async def read_fit(conn: Any, *, user_id: int, kind: str) -> Fit | None:
     row = await conn.fetchrow(
         """
         SELECT w, width, digest, features_version, weight, content_lambda, con_sd, con_mean,
-               cv_rho, base_rho, era_centre, era_spread, era_used, label_count, used, dropped, folds
+               cv_rho, base_rho, label_count, used, dropped, folds
           FROM user_content_fit WHERE user_id = $1 AND kind = $2
         """,
         user_id, kind,
@@ -793,8 +701,6 @@ async def read_fit(conn: Any, *, user_id: int, kind: str) -> Fit | None:
         return None
     return Fit(
         w=unpack(row["w"], int(row["width"])),
-        era=Era(centre=float(row["era_centre"]), spread=float(row["era_spread"]),
-                used=int(row["era_used"])),
         weight=float(row["weight"]), lam=float(row["content_lambda"]),
         cv_rho=float(row["cv_rho"] or 0.0), base_rho=float(row["base_rho"] or 0.0),
         con_sd=float(row["con_sd"]), con_mean=float(row["con_mean"]), digest=row["digest"],

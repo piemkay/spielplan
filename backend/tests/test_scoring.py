@@ -951,7 +951,6 @@ async def test_the_content_head_is_written_even_when_it_declines(db, world):
     # own kind only (§4.1 rule 5).
     assert row["label_count"] == 2
     assert row["bundle_version"] == BUNDLE
-    assert row["era_spread"] > 0, "0052's CHECK forbids a zero spread"
 
 
 async def test_a_declining_head_leaves_every_score_exactly_where_the_fold_in_put_it(db, world):
@@ -984,11 +983,10 @@ async def test_the_feature_layout_is_one_shared_space(db, world):
     assert first.layout.keys[first.layout.member_from:] == content.MEMBER_KEYS
     assert first.x.shape == (len(coords), first.layout.member_from)
 
-    # The decade column is set from the title's own year, which is what the era measure reads.
-    years = {int(t): y for t, y in zip(first.title_ids, first.years, strict=True)}
+    # The decade column is set from the title's own year, and it is the only year signal left
+    # (decision 571).
     for title_id, kind, _name, _orig, year, *_rest in fx.TITLES:
-        if kind == "movie" and title_id in years and year:
-            assert years[title_id] == float(year)
+        if kind == "movie" and title_id in first.row_of and year:
             column = first.layout.keys.index(f"decade:{(int(year) // 10) * 10}")
             assert first.x[first.row_of[title_id], column] == 1.0
 

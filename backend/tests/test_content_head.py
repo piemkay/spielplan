@@ -1,8 +1,8 @@
-"""§5.1's content head: the era measure, the solve, and the member-to-member read (568-570).
+"""§5.1's content head: the solve, the weight gate, and the member-to-member read (568-571).
 
 No database: the arithmetic is the contract, and a `Features` is a plain dataclass, so the whole
-head can be driven from numpy. The era measure gets the most attention here because it is the one
-quantity in the design that is read off the member's own placements rather than off the film.
+head can be driven from numpy. Decision 571 removed the era band, so the only member-relative
+columns left are the person affinity and `cf`.
 """
 
 from __future__ import annotations
@@ -30,67 +30,12 @@ def make_features(n: int = 240, *, seed: int = 3) -> tuple[content.Features, np.
     hated = rng.random(n)
     x[:, lay.keys.index("dna:sweeping")] = loved
     x[:, lay.keys.index("dna:bleak")] = hated
-    years = np.asarray(1950 + (np.arange(n) % 70), dtype=np.float64)
     ids = np.arange(1, n + 1, dtype=np.int64)
     features = content.Features(
-        layout=lay, title_ids=ids, x=x, years=years,
+        layout=lay, title_ids=ids, x=x,
         people={}, row_of={int(t): i for i, t in enumerate(ids)},
     )
     return features, loved - hated
-
-
-# --- the era measure (decision 569) ------------------------------------------------------------
-
-
-def test_era_centres_on_the_steps_the_member_placed_high():
-    years = np.asarray([1960.0, 1965.0, 2010.0, 2012.0, 2014.0, 2016.0, 2018.0])
-    steps = np.asarray([0.0, 1.0, 5.0, 5.0, 4.0, 4.0, 5.0])
-    era = content.era_of(years, steps, fallback=1990.0)
-    assert era.measured
-    assert 2010.0 <= era.centre <= 2018.0, era.centre
-    # The two films they placed at E and D are below their own mean and carry no weight at all.
-    assert era.spread >= content.ERA_MIN_SPREAD
-
-
-def test_era_spread_is_floored_so_a_tight_first_sitting_is_not_a_sharp_rule():
-    years = np.asarray([2014.0, 2015.0, 2015.0, 2016.0, 2016.0, 2017.0])
-    steps = np.asarray([5.0, 5.0, 4.0, 4.0, 0.0, 0.0])
-    era = content.era_of(years, steps, fallback=1990.0)
-    assert era.spread == pytest.approx(content.ERA_MIN_SPREAD)
-
-
-def test_era_declines_to_measure_under_five_known_years():
-    years = np.asarray([2010.0, 2012.0, np.nan, np.nan])
-    steps = np.asarray([5.0, 4.0, 5.0, 0.0])
-    era = content.era_of(years, steps, fallback=1994.0)
-    assert not era.measured
-    assert era.centre == 1994.0
-    assert era.used == 2
-
-
-def test_era_declines_to_measure_when_every_step_is_the_same():
-    years = np.asarray([1970.0, 1980.0, 1990.0, 2000.0, 2010.0, 2020.0])
-    era = content.era_of(years, np.full(6, 3.0), fallback=1995.0)
-    assert not era.measured
-
-
-def test_era_columns_are_two_capped_hinges_and_an_unknown_flag():
-    era = content.Era(centre=2010.0, spread=10.0)
-    cols = content.era_columns(np.asarray([2010.0, 1990.0, 2030.0, 1900.0, np.nan]), era)
-    older, newer, unknown = cols[:, 0], cols[:, 1], cols[:, 2]
-    assert cols.shape == (5, 3)
-    assert (older[0], newer[0]) == (0.0, 0.0)          # dead on the centre
-    assert (older[1], newer[1]) == (2.0, 0.0)          # twenty years older is two spreads older
-    assert (older[2], newer[2]) == (0.0, 2.0)
-    assert older[3] == content.ERA_MAX_HINGE           # capped, not 11 spreads
-    assert (older[4], newer[4], unknown[4]) == (0.0, 0.0, 1.0)
-    assert list(unknown) == [0.0, 0.0, 0.0, 0.0, 1.0]
-
-
-def test_era_columns_are_flat_when_no_band_was_measured():
-    era = content.Era(centre=1990.0, spread=content.ERA_NO_BAND)
-    cols = content.era_columns(np.asarray([1930.0, 2025.0]), era)
-    assert np.allclose(cols[:, :2], 0.0)
 
 
 # --- the solve ---------------------------------------------------------------------------------
@@ -184,9 +129,8 @@ def test_at_zero_weight_the_score_is_the_fold_ins_own_score():
     ids = [int(t) for t in features.title_ids]
     base = {t: float(t) for t in ids}
     zero = content.Fit(
-        w=np.zeros(features.layout.width), era=content.Era(2000.0, 10.0), weight=0.0, lam=100.0,
-        cv_rho=0.2, base_rho=0.2, con_sd=1.0, con_mean=0.0, digest=features.layout.digest,
-        label_count=0,
+        w=np.zeros(features.layout.width), weight=0.0, lam=100.0, cv_rho=0.2, base_rho=0.2,
+        con_sd=1.0, con_mean=0.0, digest=features.layout.digest, label_count=0,
     )
     rows = content.score_many(zero, features, base, dict.fromkeys(ids, 0.0), [], ids)
     assert [(t, s) for t, s, _c in rows] == [(t, float(t)) for t in ids]
@@ -232,7 +176,7 @@ def test_labels_on_titles_outside_the_design_are_counted_not_ignored():
 def test_the_member_tail_is_last_and_named():
     lay = layout()
     assert lay.keys[lay.member_from:] == content.MEMBER_KEYS
-    assert "era:older" not in lay.keys[: lay.member_from]
+    assert "people:affinity" not in lay.keys[: lay.member_from]
 
 
 def test_the_digest_moves_with_the_vocabulary():
@@ -252,8 +196,8 @@ def _fit_with(w_title: dict[str, float], digest: str, lay: content.Layout) -> co
     for key, value in w_title.items():
         w[lay.keys.index(key)] = value
     return content.Fit(
-        w=w, era=content.Era(2000.0, 10.0), weight=0.5, lam=10.0, cv_rho=0.5, base_rho=0.4,
-        con_sd=1.0, con_mean=0.0, digest=digest, label_count=50,
+        w=w, weight=0.5, lam=10.0, cv_rho=0.5, base_rho=0.4, con_sd=1.0, con_mean=0.0,
+        digest=digest, label_count=50,
     )
 
 
@@ -273,11 +217,13 @@ def test_match_separates_what_two_members_share_from_what_splits_them():
 
 def test_match_leaves_the_member_relative_tail_out():
     lay = layout()
-    a = _fit_with({"dna:sweeping": 1.0, "era:older": -2.0}, lay.digest, lay)
-    b = _fit_with({"dna:sweeping": 1.0, "era:older": -2.0}, lay.digest, lay)
+    a = _fit_with({"dna:sweeping": 1.0, "people:affinity": 2.0}, lay.digest, lay)
+    b = _fit_with({"dna:sweeping": 1.0, "people:affinity": 2.0}, lay.digest, lay)
     out = content.match(a, b, lay)
     named = {k for k, _p, _q in (*out.shared, *out.opposed)}
-    assert "era:older" not in named, "an era hinge means a different thing in each fit"
+    assert "people:affinity" not in named, (
+        "an affinity is read off each member's own placements and means a different thing in each"
+    )
     assert "dna:sweeping" in named
 
 

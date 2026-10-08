@@ -24,7 +24,8 @@
 **v2.1.19 (2026-10-02):** the 1.2.0 design pass: You without footnotes, its switch group shown only when another member has a PIN (decision 553; §3.2); Home one width on a desktop, as Rank is, its Filters a row of cells and its notices one bar that the member can put away, for good or until tomorrow (554; §4.2, §6.0, §7.3); Rate's pace back on decision 530's own numbers (555; conformance, no section amended); a set-up page of nine films the household watched and three widely seen ones (556; §6.1); filters by taste term and by person, reached from a title card's terms and credits too (557; §6.0, §6.3); Only in library on by default, and a search beyond it to the catalogue and TMDB, a wish for a title Spielplan does not hold minting its row (558; §1, §4.2, §6.0, §6.8, §8); film arithmetic in Home, Like these films and More like this, but… (559; §6.0, §6.4, §8.4, §12); and a recipe that takes one or more groups of a film (560; §6.0).
 **v2.1.20 (2026-10-03):** the ladder has six steps, graded words where it had feelings: S All-time favourite, A Excellent, B Very good, C Good, D OK, E Not for me, one step for a film the person did not like, the tier shape the household's own and the verdict line at Good (decision 561; §4.2, §5.1, §6.1, §6.3); every member sets the ladder up again.
 **v2.1.21 (2026-10-03):** the 1.4.0 iteration: Home's rows show titles not yet seen and three rewatch rows only seen ones, a title held out of them for 12 months after a real play, read from Jellyfin's play date past the app's own writes and bulk marks (decision 562; §4.2, §6.0, §7.3); up to fifteen rows a kind, with more Because rows, taste rows, Hidden gems, Acclaimed and {other} loved these, in the day's order (563; §6.0); and Sharpen's cross-tier check, alike pairs and rest, its clear moves listed at the round's end with Undo, under a fit that weighs answers by age (564; §4.2, §5.2, §6.3, §13); and the household rows read every member, with a loved row for each other member (565; §6.0, §6.5); and Rate serves the library's titles first (566; §6.1); Worth getting shows well-known feature films by the member's own half of the score and its See all filters by decade and sorts newest first, and concerts leave Home's rows unless the viewer likes them (567; §6.0).
-**v2.1.22 (2026-10-08):** the content head: §5.1 gains a third term, one ridge per member over a feature space shared by every member — the DNA vocabulary, genre, decade, the era band, runtime, language, platform votes and score, the crowd prior, the member's affinity for the people who made the film, and `cf` — weighted per member on held-out agreement over their own top band and capped at 0.5 and at n/(n+120), with `user_score.con` and `user_content_fit` behind it (decision 568; §4.2, §5.1, §5.3); a film's era measured against the band of years the member's own good placements sit in, carried as two capped hinges and an unknown-year flag (569; §4.2, §5.1); and that one shared space is also how two members are matched, by the agreement between their predictions and by their unit-normalised weights, the member-relative columns left out (570; §5.1).
+**v2.1.22 (2026-10-08):** the content head: §5.1 gains a third term, one ridge per member over a feature space shared by every member — the DNA vocabulary, genre, decade, the era band, runtime, language, platform votes and score, the crowd prior, the member's affinity for the people who made the film, and `cf` — weighted per member on held-out agreement over their own top band and capped at 0.5 and at n/(n+120), with `user_score.con` and `user_content_fit` behind it (decision 568; §4.2, §5.1, §5.3); and that one shared space is also how two members are matched, by the agreement between their predictions and by their unit-normalised weights, the member-relative columns left out (570; §5.1).
+**v2.1.23 (2026-10-08):** decision 571 retires 569 the day after it shipped: the era band made the drift it was introduced to fix worse (Patrick's top forty owned films averaged 1998 with it against 2001 without, at slightly worse held-out agreement) and its hinge never learned the sign the decision assumed, so both hinges, the unknown-year flag and the two stored scalars go, `0053_no_era_band.sql` drops the columns and `FEATURES_VERSION` becomes `content-2`; the decade one-hots remain, and the drift stays open (§4.2, §5.1).
 **Supersedes:** `media-graph-spec_v1.1.md` — v1.1's interaction designs survive where they were validated; its modelling core is replaced by the measured architecture (below). Where the two disagree, this spec wins.
 **Companions:** every non-obvious modelling decision carries a pointer into the corpus project's evidence: `ARCHITECTURE.md` (the model — its §3 and Appendix C are **vendored** into this repo as `ARCHITECTURE-extracts.md`, because a normative pointer nobody here can read is not normative; decision 294), `APP_SPEC.md` + `WATCH_NOW.md` + `LABELLING.md` + `DNA_MODEL.md` (measured product decisions), `RATINGS_PREP.md` (data provenance). `media-graph-spec_v1.1.md` is **vendored into the new repo's `docs/`** (superseded, but this spec cites its surviving interaction designs by section — v1.1 §5.4.5's social design is normative where cited). Schema and acceptance criteria are always inlined here; only UI prose remains by pointer.
 
@@ -173,13 +174,11 @@ ledger_state(user_id, title_id, s float, sigma float, tier smallint, updated_at)
     --   0..1 weight" the owner asked for)
 ledger_cutpoints(user_id, boundaries float[])   -- learned tier cutpoints; length = |tier set| − 1 (default 5, ordered ascending)
 user_vector(user_id, kind, vec bytea, updated_at)  -- 64-d fold-in, mood tilt cache
-user_content_fit(user_id, kind, w bytea, width, digest, weight, era_centre, era_spread, ...)
+user_content_fit(user_id, kind, w bytea, width, digest, weight, cv_rho, base_rho, ...)
     -- §5.1's third term (decision 568): one ridge per (user, kind) over the shared feature space,
     --   as wide as the layout rather than 64, so it cannot share user_vector's bytea convention.
     -- digest pins the column order; a fit from another layout or feature version reads as absent
     --   and is refitted, never reinterpreted (decision 570)
-    -- era_centre / era_spread are the member's own band of years (decision 569); serving has to
-    --   reproduce the hinge the fit was chosen under
     -- weight is w_u, 0 when the cross-validation did not earn it; a row is written either way,
     --   because "fitted and declined" and "never ran" are different states
 
@@ -278,8 +277,8 @@ score_u(t) = μ_u + (1-w_u)·[(1-β_u)·z(b(t)) + β_u·cf_u(t)] + w_u·con_u(t)
 
 **The third term reads the film (decision 568).** `con_u` is a ridge over **one feature space shared
 by every member**: the active DNA vocabulary at `dna_terms.TERM_WEIGHT`, canonical genre, decade,
-§5.1's era band (decision 569), runtime, original language, platform votes and score, the crowd
-prior, the member's own affinity for the people who made the film, and `cf` itself. Before it, facts
+runtime, original language, platform votes and score, the crowd prior, the member's own affinity for
+the people who made the film, and `cf` itself. Before it, facts
 about a film reached the score only through the Cold Tower, which runs only for a title the crowd
 never rated — 22 of 11,699 on production — so the imported DNA could say "this is like that" and
 never "you will like this". `w_u` is chosen per member on held-out agreement over that member's own
@@ -289,19 +288,21 @@ buys only a small share of the score. At `w_u = 0` the score is the fold-in's ow
 is stored even at zero weight: "fitted and declined" is not "never ran". `user_score.con` carries
 the term per title beside `cf`.
 
-**The era band (decision 569).** Each (member, kind) fit measures where the member's own good
-placements sit in time: the weighted median year of their placements, weighted by how far above
-their own mean each sits, with a half-width from the weighted median absolute deviation, floored at
-8 years. The design carries it as two hinges — how many spreads older than the band, how many newer,
-each capped at four — and a flag for an unknown year. Fewer than five known years, or no spread in
-the steps, measures no band and both hinges are exactly zero.
+**There is no era feature (decision 571 retires 569).** A band of years measured from the member's
+own good placements shipped in 0052 and was removed the day after: measured on production it made
+the drift it was meant to fix worse — Patrick's top forty owned films averaged 1998 with it and 2001
+without, at slightly worse held-out agreement — and with its collinear decade columns removed the
+hinge settled at +0.001, never learning the sign the decision assumed. The decade one-hots remain
+and carry whatever the release year is worth, which on this evidence is close to nothing. The drift
+itself is a property of the candidate pool and of survivorship in what a member has rated, and it
+remains open.
 
 **One space is also how two members are matched (decision 570).** Because the column order and the
 scalings are one shared thing, two members' weight vectors are comparable. The headline match is the
 agreement between what their heads predict over the same reference population; the columns behind it
 come from the weights, each normalised to unit length, reported as what the two pull the same way on
-and what they pull apart on. The member-relative columns — the era hinges, the person affinity and
-`cf` — are left out, because they mean a different thing in each fit, and a layout digest refuses
+and what they pull apart on. The member-relative columns — the person affinity and `cf` — are left
+out, because they mean a different thing in each fit, and a layout digest refuses
 two fits built under different column orders rather than comparing them anyway. A weight is a
 partial effect, not a preference: "do you like fantasy" stays with §6.5's chart, which reads the
 placements (decision 549).
