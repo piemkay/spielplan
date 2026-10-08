@@ -153,24 +153,30 @@ async def priors_owed(conn, *, bundle_version: str) -> list[int]:
 
 async def replace_scores(
     conn, *, user_id: int, kind: Kind, bundle_version: str,
-    rows: Sequence[tuple[int, float, float]],
+    rows: Sequence[tuple[int, float, float] | tuple[int, float, float, float]],
 ) -> int:
     """Rewrite one (user, kind)'s `user_score` rows.
 
     Replace, not update: a title that lost its coordinate must lose its score. `score` is
     indexed, so an upsert cannot be HOT and costs more.
+
+    A row is `(title_id, score, cf)` or `(title_id, score, cf, con)`; the three-element form means
+    no content head ran and leaves `con` at zero (decision 568).
     """
     async with conn.transaction():
         await conn.execute("DELETE FROM user_score WHERE user_id = $1 AND kind = $2", user_id, kind)
         if rows:
             await conn.execute(
                 """
-                INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf, computed_at)
-                SELECT $1, u.title_id, $2, $3, u.score, u.cf, now()
-                  FROM unnest($4::integer[], $5::real[], $6::real[]) AS u(title_id, score, cf)
+                INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf, con,
+                                        computed_at)
+                SELECT $1, u.title_id, $2, $3, u.score, u.cf, u.con, now()
+                  FROM unnest($4::integer[], $5::real[], $6::real[], $7::real[])
+                       AS u(title_id, score, cf, con)
                 """,
                 user_id, kind, bundle_version,
                 [int(r[0]) for r in rows], [float(r[1]) for r in rows], [float(r[2]) for r in rows],
+                [float(r[3]) if len(r) > 3 else 0.0 for r in rows],
             )
     return len(rows)
 

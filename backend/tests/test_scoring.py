@@ -18,7 +18,7 @@ from spielplan.ledger import model, observations
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
 from spielplan.scoring import backbone as bb
-from spielplan.scoring import foldin, serve
+from spielplan.scoring import content, foldin, serve
 from tests.fixtures import make_bundle as fx
 
 BUNDLE = "test-v1"
@@ -933,3 +933,70 @@ async def test_a_silent_reask_does_not_erase_the_label_it_re_asked(db, world):
     assert await db.fetchval(
         "SELECT count(*) FROM verdict WHERE user_id = $1 AND title_id = 1", patrick
     ) == rows_before + 1
+
+
+# --- §5.1's content head (decisions 568-570) ---------------------------------------------------
+
+
+async def test_the_content_head_is_written_even_when_it_declines(db, world):
+    """Three labels is under `MIN_LABELS_FOR_CV`, so the head is fitted, recorded and given no
+    weight. "Fitted and declined" has to be visible, or a reviewer cannot tell it from "never ran"."""
+    row = await db.fetchrow(
+        "SELECT * FROM user_content_fit WHERE user_id = $1 AND kind = 'movie'", world["patrick"]
+    )
+    assert row is not None
+    assert row["weight"] == 0.0
+    assert row["features_version"] == content.FEATURES_VERSION
+    # The fixture's three verdicts are on titles 1, 2 and 6, and 6 is a series: a head reads its
+    # own kind only (§4.1 rule 5).
+    assert row["label_count"] == 2
+    assert row["bundle_version"] == BUNDLE
+    assert row["era_spread"] > 0, "0052's CHECK forbids a zero spread"
+
+
+async def test_a_declining_head_leaves_every_score_exactly_where_the_fold_in_put_it(db, world):
+    """The safety property the whole design rests on: at weight 0 the shelves do not move."""
+    rows = await db.fetch(
+        "SELECT title_id, score, cf, con FROM user_score WHERE user_id = $1 AND kind = 'movie'"
+        " ORDER BY title_id",
+        world["patrick"],
+    )
+    assert rows, "the member is ranked"
+    assert all(r["con"] == 0.0 for r in rows)
+
+    coords = await serve.coordinates(db, world["backbone"], bundle_version=BUNDLE, kind="movie")
+    labels = await foldin.live_labels(db, user_id=world["patrick"], kind="movie")
+    fit = foldin.fit_user(labels, coords, list(coords.values()), seed=0)
+    # Not the same seed as the job's, so compare the arithmetic rather than the exact fit: with no
+    # weight on the head, `score` must be a function of the fold-in's two halves alone.
+    by_id = {t: (s, c) for t, s, c in foldin.score_many(fit, list(coords.values()))}
+    for r in rows:
+        assert r["cf"] == pytest.approx(by_id[r["title_id"]][1], abs=1e-5)
+
+
+async def test_the_feature_layout_is_one_shared_space(db, world):
+    """Built twice, byte-identical: it is the same design for every member (decision 570)."""
+    coords = await serve.coordinates(db, world["backbone"], bundle_version=BUNDLE, kind="movie")
+    first = await content.build_features(db, title_ids=list(coords), bundle_version=BUNDLE)
+    second = await content.build_features(db, title_ids=list(coords), bundle_version=BUNDLE)
+    assert first.layout.digest == second.layout.digest
+    assert np.array_equal(first.x, second.x)
+    assert first.layout.keys[first.layout.member_from:] == content.MEMBER_KEYS
+    assert first.x.shape == (len(coords), first.layout.member_from)
+
+    # The decade column is set from the title's own year, which is what the era measure reads.
+    years = {int(t): y for t, y in zip(first.title_ids, first.years, strict=True)}
+    for title_id, kind, _name, _orig, year, *_rest in fx.TITLES:
+        if kind == "movie" and title_id in years and year:
+            assert years[title_id] == float(year)
+            column = first.layout.keys.index(f"decade:{(int(year) // 10) * 10}")
+            assert first.x[first.row_of[title_id], column] == 1.0
+
+
+async def test_two_members_with_no_head_still_report_an_agreement(db, world):
+    """`match_members` reads the scores when a fit is missing, so a household always has a number."""
+    out = await content.match_members(
+        db, kind="movie", a=world["patrick"], b=world["jenny"]
+    )
+    assert -1.0 <= out.agreement <= 1.0
+    assert out.shared == () and out.opposed == ()

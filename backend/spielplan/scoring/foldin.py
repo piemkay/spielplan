@@ -26,7 +26,7 @@ from spielplan.ledger.observations import (
     rescale_level,
     tier_set_of,
 )
-from spielplan.scoring import serve
+from spielplan.scoring import content, serve
 from spielplan.scoring.backbone import (
     COORDINATE_GEOMETRY,
     EMBED_DIM,
@@ -348,8 +348,14 @@ async def write_fit(
 async def refit_user(
     conn, backbone: Backbone, *, user_id: int, kind: Kind, bundle_version: str,
     report: FoldInReport | None = None,
+    features: content.Features | None = None,
 ) -> Fit:
-    """Refit one (user, kind) and rewrite its `user_score` rows. §5.3, §10's rebuild set."""
+    """Refit one (user, kind) and rewrite its `user_score` rows. §5.3, §10's rebuild set.
+
+    With `features`, §5.1's content head is fitted after this one and in the same transaction: it
+    reads `cf` as one of its columns, so it cannot run first, and a score committed without its own
+    fit would read as fresh (decision 568). Without it the head is absent and `con` stays zero.
+    """
     entered = time.perf_counter()
     # Read before the coordinates and the labels, so nothing this fit saw is newer than its stamp.
     # clock_timestamp(), not now(): on §10's rebuild path this runs inside a long transaction.
@@ -366,7 +372,20 @@ async def refit_user(
 
     numpy_started = time.perf_counter()
     fit = fit_user(labels, coords, reference, seed=seed)
+    rows: list[tuple[int, float, float]] | list[tuple[int, float, float, float]]
     rows = score_many(fit, reference)
+    head: content.Fit | None = None
+    if features is not None:
+        base = {t: s for t, s, _c in rows}
+        cf_of = {t: c for t, _s, c in rows}
+        head = content.fit_user(labels, features, base, cf_of, seed=seed)
+        labelled = [(int(t), float(step)) for t, step in labels if int(t) in features.row_of]
+        rows = [
+            (t, s, cf_of[t], c)
+            for t, s, c in content.score_many(
+                head, features, base, cf_of, labelled, [t for t, _s, _c in rows]
+            )
+        ]
     numpy_ms = (time.perf_counter() - numpy_started) * 1000.0
 
     if fit.beta_clamped:
@@ -381,12 +400,24 @@ async def refit_user(
             user_id, kind, fit.dropped,
         )
 
+    if head is not None and head.weight > 0.0:
+        log.info(
+            "user %s/%s: content head carries %.1f of the score, held-out ρ %.3f against %.3f "
+            "(era centre %s)",
+            user_id, kind, head.weight, head.cv_rho, head.base_rho, head.era.as_dict()["centre"],
+        )
+
     # One transaction: a committed fit with no scores reads as fresh and serves empty shelves.
     async with conn.transaction():
         await write_fit(
             conn, user_id=user_id, kind=kind, bundle_version=bundle_version, fit=fit,
             updated_at=fitted_at,
         )
+        if head is not None and features is not None:
+            await content.write_fit(
+                conn, user_id=user_id, kind=kind, bundle_version=bundle_version, fit=head,
+                width=features.layout.width,
+            )
         await serve.replace_scores(
             conn, user_id=user_id, kind=kind, bundle_version=bundle_version, rows=rows,
         )
@@ -427,6 +458,10 @@ async def run(
                     conn, backbone, bundle_version=bundle_version, title_ids=owed
                 )
 
+    # The title half of the content design is the same for every member (decision 570) and reading
+    # it is the cost, not the solve, so it is built once per kind per run and only for a kind that
+    # has something to refit.
+    features: dict[str, content.Features] = {}
     for user_id in await household_ids(conn):
         for kind in KINDS:
             if only_stale and not await _is_stale(
@@ -434,9 +469,16 @@ async def run(
             ):
                 report.skipped += 1
                 continue
+            if kind not in features:
+                coords = await serve.coordinates(
+                    conn, backbone, bundle_version=bundle_version, kind=kind
+                )
+                features[kind] = await content.build_features(
+                    conn, title_ids=list(coords), bundle_version=bundle_version
+                )
             fit = await refit_user(
                 conn, backbone, user_id=user_id, kind=kind, bundle_version=bundle_version,
-                report=report,
+                report=report, features=features[kind],
             )
             report.refit.append((user_id, kind))
             report.scores_written += 1

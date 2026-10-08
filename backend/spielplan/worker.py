@@ -262,7 +262,11 @@ async def _ledger_refresh_tick() -> dict[str, object] | None:
 
 
 async def _fold_in_user_vectors() -> dict[str, object] | None:
-    """§5.3: "User fold-in + blend weights — nightly, seconds"."""
+    """§5.3: "User fold-in + blend weights — nightly, seconds", and §5.1's content head with it.
+
+    One job, because the head reads `cf` as a column and so cannot run before the fold-in that
+    produces it (decision 568).
+    """
     from spielplan.scoring import backbone as bb
     from spielplan.scoring import foldin
 

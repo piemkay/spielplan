@@ -17120,6 +17120,124 @@ counts platform votes, not the crowd dataset's ratings, which stop about 2019, s
 the 2020s fills. Ranking by `cf` ignores the crowd's and critics' view of an unowned film beyond the
 vote floor.
 
+## Decisions taken (owner, 2026-10-08, the content head)
+
+### 568. The personal score reads the film, not only the crowd's coordinate for it
+
+**What the record says.** §5.1 is `score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩`, where `e(t)` is a
+64-d coordinate from the 95M-rating backbone. Facts about the film reach it only through the Cold
+Tower, and the Cold Tower runs only for a title the crowd never rated: on production that is 22
+titles of 11,699. The corpus's DNA vocabulary is imported for 8,957 of them and is read by Home's
+"shares a lot with", the Because shelves and the taste filters, but by no term of the score. So the
+DNA says "this is like that" and never "you will like this".
+
+**Why it changes.** Measured on production, 2026-10-08, five-fold cross-validation repeated six
+times over each member's own placements: the fold-in's shape reaches held-out pairs 0.897 for
+Patrick and 0.698 for Jenny, while one ridge over the film's own facts plus the crowd prior plus
+`cf` reaches 0.938 and 0.784, Jenny's top ten going 5.5 right to 7.8. Driving the shipped module
+over the same labels, held out fold by fold against the live score: Patrick 0.906 to 0.927 pairs and
+9 of 10 to 10 of 10 at the top, Jenny 0.839 to 0.849 and 6 of 10 to 8 of 10. Jenny's column is the
+argument for the shape: the film's facts alone reach 0.21 on her ordering and `cf` alone 0.33, but
+together 0.54 — the two are not redundant, and the head is additive rather than a replacement.
+
+**The decision.**
+1. §5.1 gains a third term: `score_u(t) = μ_u + (1−w_u)·[(1−β_u)·z(b(t)) + β_u·cf(t)]
+   + w_u·con_u(t)`. The fold-in's two halves are untouched, and at `w_u = 0` the score is the one
+   the fold-in already serves, to the bit.
+2. `con_u` is a ridge over **one feature space shared by every member**: the active DNA vocabulary
+   weighted as `dna_terms.TERM_WEIGHT` weighs it, canonical genre, decade, the era measure of
+   decision 569, runtime, original language, platform votes and score, the crowd prior, the
+   member's own affinity for the people who made the film, and `cf`. The column order, the scalings
+   and the recipe are identical for everyone; only the weights differ.
+3. `w_u` is chosen per member by held-out agreement on that member's own **top band**, the ladder's
+   top two steps, not by Spearman over all six: the question a row answers is "would they place
+   this at A or S", and at 123 and 81 labels the top-band statistic is the steadier of the two. The
+   choice is averaged over six fold assignments, because one pass over 77 grid cells decides on the
+   shuffle rather than on the member.
+4. The weight is capped twice: at 0.5, for §5.1's own reason for `BETA_MAX`, so the crowd prior and
+   the fold-in always carry half; and at `n/(n+120)` in the member's label count, as §5.1 gates a
+   coordinate, so a short ladder buys only a small share of the score. A head admitted in error is
+   then bounded rather than decisive.
+5. `user_score` gains `con`, beside `cf`, so §6.7's rail can show all three halves and a shelf that
+   ranks by the personal half alone (decision 567) does not have to recompute anything.
+6. A fit is stored even when it takes no weight. "Fitted and declined" and "never ran" are
+   different states, and a reviewer has to be able to tell them apart.
+
+The spec is amended in place (v2.1.22): §4.2, §5.1, §5.3.
+
+**Cost.** One ridge per member and kind per night, solved in the dual — an n-by-n solve in the label
+count rather than 600-by-600 — and one matrix of the kind's titles built once per run: milliseconds
+of arithmetic inside §5.3's seconds, plus one extra multiply per title at serving. The honest limit
+is sample size: at 81 to 123 labels a gain of a few hundredths cannot be certified per member per
+night, which is why the gate is a sanity check and the two caps carry the safety, and why a standing
+offline bench is what should decide whether this head keeps its place.
+
+### 569. A film's era is measured against the band of years the member's own good placements sit in
+
+**What the record says.** Nothing in the score knew when a film was made. Ranking the unowned pool
+by `cf` gave Patrick a top 40 averaging 1991 against a pool averaging 2001, and adding the film's
+facts moved the error rather than removing it: quality rose from 7.36 to 8.02 while the mean year
+fell to 1980, a top twelve of Lawrence of Arabia, Harakiri, Come and See and Ivan's Childhood — for
+a member whose ladder holds exactly one pre-1997 film above B.
+
+**Why it changes.** His A/S terms are sweeping, tense, violent and cerebral, and the films that
+score highest on those words are 1960s epics and Soviet war cinema. The vocabulary describes him
+correctly; the extreme of each word sits in the wrong decade. Ten decade columns do not fix it,
+because a sparse 570-column DNA block beside them takes the penalty budget.
+
+**The decision.**
+1. Each (member, kind) fit measures an **era band**: the weighted median year of the member's own
+   placements, weighted by how far above their own mean each placement sits, so a film they put
+   below their average carries nothing. The half-width is the weighted median absolute deviation,
+   scaled to an sd and floored at 8 years, so a first sitting that happens to share a decade does
+   not become a sharp rule.
+2. The design carries the band as **two hinges and a flag**: how many spreads older than the band a
+   film is, how many newer, each capped at four, and whether the year is known at all (301 title
+   rows carry none). Two directions, because refusing everything older than your band while not
+   caring how much newer a film is is one preference, not two halves of a distance.
+3. Fewer than five known years, or no spread in the steps, measures no band: both hinges are then
+   exactly zero. No band measured, nothing guessed.
+4. The band is stored with the fit, because serving has to reproduce the hinge the fit was chosen
+   under, and because it is a readable number for §6.7's model line. On production it reads 2010
+   plus or minus 10 years for Patrick and 2008 plus or minus 8 for Jenny.
+
+The spec is amended in place (v2.1.22): §4.2, §5.1.
+
+**Cost.** Three columns and two stored scalars. The band is a property of the member, so it is one
+of the columns decision 570's comparison leaves out.
+
+### 570. One shared feature space is also how two members are matched
+
+**What the record says.** §6.5's chart compares two members per DNA term by reading their placements
+directly (decision 549), and §6.0's shared sweet spot averages each member's standardised rank
+(decision 477). Neither reads a model, so neither can say how alike two members' taste is over the
+catalogue — only over what they have both rated, which on production is 65 films against 123 and 81.
+
+**Why it changes.** Decision 568's head puts every member's weights in one space with one column
+order. Two vectors in one space can be compared, and their predictions can be compared over the
+whole catalogue rather than over the overlap.
+
+**The decision.**
+1. The headline match between two members is the agreement between what their two heads predict
+   over the same reference population: every title of the kind they both hold a score for. On
+   production that is 0.741 over 11,699 films for this household.
+2. The columns behind it come from the weights, each member's normalised to unit length first, so
+   that one member having a louder fit than the other does not decide the comparison. They are
+   reported as what the two pull the same way on and what they pull apart on.
+3. The member-relative tail is left out: an era hinge, a person affinity and `cf` mean a different
+   thing in each fit. `Layout.digest` pins the column order, and two fits from different layouts
+   are reported as not comparable rather than compared anyway.
+4. A weight is a **partial** effect, not a preference: it is what a column adds once the other six
+   hundred have spoken, so a member who loves epic fantasy can carry a negative `genre:Fantasy`
+   because the DNA terms already said it. The question "do you like fantasy" stays with §6.5's
+   chart, which reads the placements.
+
+The spec is amended in place (v2.1.22): §5.1.
+
+**Cost.** One cosine over the shared columns and one Spearman over the scores, both read from rows
+that already exist. No new surface: this decision provides the number and names nothing that shows
+it, which is a later milestone's call.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

@@ -24,6 +24,7 @@
 **v2.1.19 (2026-10-02):** the 1.2.0 design pass: You without footnotes, its switch group shown only when another member has a PIN (decision 553; §3.2); Home one width on a desktop, as Rank is, its Filters a row of cells and its notices one bar that the member can put away, for good or until tomorrow (554; §4.2, §6.0, §7.3); Rate's pace back on decision 530's own numbers (555; conformance, no section amended); a set-up page of nine films the household watched and three widely seen ones (556; §6.1); filters by taste term and by person, reached from a title card's terms and credits too (557; §6.0, §6.3); Only in library on by default, and a search beyond it to the catalogue and TMDB, a wish for a title Spielplan does not hold minting its row (558; §1, §4.2, §6.0, §6.8, §8); film arithmetic in Home, Like these films and More like this, but… (559; §6.0, §6.4, §8.4, §12); and a recipe that takes one or more groups of a film (560; §6.0).
 **v2.1.20 (2026-10-03):** the ladder has six steps, graded words where it had feelings: S All-time favourite, A Excellent, B Very good, C Good, D OK, E Not for me, one step for a film the person did not like, the tier shape the household's own and the verdict line at Good (decision 561; §4.2, §5.1, §6.1, §6.3); every member sets the ladder up again.
 **v2.1.21 (2026-10-03):** the 1.4.0 iteration: Home's rows show titles not yet seen and three rewatch rows only seen ones, a title held out of them for 12 months after a real play, read from Jellyfin's play date past the app's own writes and bulk marks (decision 562; §4.2, §6.0, §7.3); up to fifteen rows a kind, with more Because rows, taste rows, Hidden gems, Acclaimed and {other} loved these, in the day's order (563; §6.0); and Sharpen's cross-tier check, alike pairs and rest, its clear moves listed at the round's end with Undo, under a fit that weighs answers by age (564; §4.2, §5.2, §6.3, §13); and the household rows read every member, with a loved row for each other member (565; §6.0, §6.5); and Rate serves the library's titles first (566; §6.1); Worth getting shows well-known feature films by the member's own half of the score and its See all filters by decade and sorts newest first, and concerts leave Home's rows unless the viewer likes them (567; §6.0).
+**v2.1.22 (2026-10-08):** the content head: §5.1 gains a third term, one ridge per member over a feature space shared by every member — the DNA vocabulary, genre, decade, the era band, runtime, language, platform votes and score, the crowd prior, the member's affinity for the people who made the film, and `cf` — weighted per member on held-out agreement over their own top band and capped at 0.5 and at n/(n+120), with `user_score.con` and `user_content_fit` behind it (decision 568; §4.2, §5.1, §5.3); a film's era measured against the band of years the member's own good placements sit in, carried as two capped hinges and an unknown-year flag (569; §4.2, §5.1); and that one shared space is also how two members are matched, by the agreement between their predictions and by their unit-normalised weights, the member-relative columns left out (570; §5.1).
 **Supersedes:** `media-graph-spec_v1.1.md` — v1.1's interaction designs survive where they were validated; its modelling core is replaced by the measured architecture (below). Where the two disagree, this spec wins.
 **Companions:** every non-obvious modelling decision carries a pointer into the corpus project's evidence: `ARCHITECTURE.md` (the model — its §3 and Appendix C are **vendored** into this repo as `ARCHITECTURE-extracts.md`, because a normative pointer nobody here can read is not normative; decision 294), `APP_SPEC.md` + `WATCH_NOW.md` + `LABELLING.md` + `DNA_MODEL.md` (measured product decisions), `RATINGS_PREP.md` (data provenance). `media-graph-spec_v1.1.md` is **vendored into the new repo's `docs/`** (superseded, but this spec cites its surviving interaction designs by section — v1.1 §5.4.5's social design is normative where cited). Schema and acceptance criteria are always inlined here; only UI prose remains by pointer.
 
@@ -172,6 +173,15 @@ ledger_state(user_id, title_id, s float, sigma float, tier smallint, updated_at)
     --   0..1 weight" the owner asked for)
 ledger_cutpoints(user_id, boundaries float[])   -- learned tier cutpoints; length = |tier set| − 1 (default 5, ordered ascending)
 user_vector(user_id, kind, vec bytea, updated_at)  -- 64-d fold-in, mood tilt cache
+user_content_fit(user_id, kind, w bytea, width, digest, weight, era_centre, era_spread, ...)
+    -- §5.1's third term (decision 568): one ridge per (user, kind) over the shared feature space,
+    --   as wide as the layout rather than 64, so it cannot share user_vector's bytea convention.
+    -- digest pins the column order; a fit from another layout or feature version reads as absent
+    --   and is refitted, never reinterpreted (decision 570)
+    -- era_centre / era_spread are the member's own band of years (decision 569); serving has to
+    --   reproduce the hinge the fit was chosen under
+    -- weight is w_u, 0 when the cross-validation did not earn it; a row is written either way,
+    --   because "fitted and declined" and "never ran" are different states
 
 session(id, room_code, host_user_id, state, kind, runtime_budget_min,
     include_rewatches, bundle_version, context jsonb, started_at, ended_at)
@@ -256,11 +266,45 @@ Read-only files from the corpus project, loaded at boot **when present** (an emp
 ### 5.1 Scoring stack (serving)
 
 ```
-score_u(t) = b(t) + μ_u + w_cf · ⟨v_u, e(t)⟩            e(t) = E[t]      if rated (warm)
-                                                        e(t) = gate·E[t] + (1-gate)·ê(t)  else
+score_u(t) = μ_u + (1-w_u)·[(1-β_u)·z(b(t)) + β_u·cf_u(t)] + w_u·con_u(t)
+
+             cf_u(t)  = ⟨v_u, d(t)⟩                     the crowd's coordinate, read as a direction
+             con_u(t) = ⟨c_u, f(t)⟩                     the film's own facts (decision 568)
+             e(t) = E[t]      if rated (warm)
+             e(t) = gate·E[t] + (1-gate)·ê(t)  else
              b(t) = shrunk item prior; b̂(t) from the Cold Tower for cold titles
              gate = n_t / (n_t + k)                     evidence gating, k≈10
 ```
+
+**The third term reads the film (decision 568).** `con_u` is a ridge over **one feature space shared
+by every member**: the active DNA vocabulary at `dna_terms.TERM_WEIGHT`, canonical genre, decade,
+§5.1's era band (decision 569), runtime, original language, platform votes and score, the crowd
+prior, the member's own affinity for the people who made the film, and `cf` itself. Before it, facts
+about a film reached the score only through the Cold Tower, which runs only for a title the crowd
+never rated — 22 of 11,699 on production — so the imported DNA could say "this is like that" and
+never "you will like this". `w_u` is chosen per member on held-out agreement over that member's own
+**top band**, the ladder's top two steps, averaged over six fold assignments, and is capped twice:
+at 0.5, for the same reason as `BETA_MAX`, and at `n/(n+120)` in the label count, so a short ladder
+buys only a small share of the score. At `w_u = 0` the score is the fold-in's own, to the bit. A fit
+is stored even at zero weight: "fitted and declined" is not "never ran". `user_score.con` carries
+the term per title beside `cf`.
+
+**The era band (decision 569).** Each (member, kind) fit measures where the member's own good
+placements sit in time: the weighted median year of their placements, weighted by how far above
+their own mean each sits, with a half-width from the weighted median absolute deviation, floored at
+8 years. The design carries it as two hinges — how many spreads older than the band, how many newer,
+each capped at four — and a flag for an unknown year. Fewer than five known years, or no spread in
+the steps, measures no band and both hinges are exactly zero.
+
+**One space is also how two members are matched (decision 570).** Because the column order and the
+scalings are one shared thing, two members' weight vectors are comparable. The headline match is the
+agreement between what their heads predict over the same reference population; the columns behind it
+come from the weights, each normalised to unit length, reported as what the two pull the same way on
+and what they pull apart on. The member-relative columns — the era hinges, the person affinity and
+`cf` — are left out, because they mean a different thing in each fit, and a layout digest refuses
+two fits built under different column orders rather than comparing them anyway. A weight is a
+partial effect, not a preference: "do you like fantasy" stays with §6.5's chart, which reads the
+placements (decision 549).
 
 **The personal half reads directions (decision 469).** ⟨v_u, e(t)⟩ is taken over d(t): the unit direction of e(t), weighted by the evidence behind it. The weight is its gate when the coordinate is the Backbone's alone and 1 when the Cold Tower contributed to it; a zero row contributes zero. The fit, its cross-validation and both scorers read d(t) through one helper. The reason is scale. The Backbone's rows are support-weighted (E = V·S, so a row's norm grows with its crowd support) and the Cold Tower's ê sits on a third scale, so a raw inner product ranks by popularity and provenance rather than by taste. The coordinates themselves are stored and served unscaled (`title_placement.e_hat`, the blend above, §6.0's model line): the corpus has since answered decision 236's question — E is support-weighted (§4.3, decision 503) — so the artifact stays as shipped, and reading directions is how the personal half meets that scale. Each stored fit records the geometry it was fitted in, and a fit in another geometry is refitted, not served.
 
@@ -292,6 +336,7 @@ Display: the 0..1 weight is the **empirical CDF of the user's own fitted `s` val
 | Ledger incremental update | every observation | <50 ms |
 | Ledger full MAP refit + cutpoints + σ | nightly | seconds |
 | Fold-in user vectors, blend weights per label count | nightly | seconds |
+| Content head per (user, kind) over the shared feature space, and its weight (decision 568). After the fold-in, which it reads `cf` from, and in the same transaction | nightly | seconds |
 | Cold Tower placement of new/changed titles | acquisition pipeline (§8) | <1 s/title |
 | Placement reconciliation: any owned title, any seed-list title and any title a member has a verdict on that lacks a coordinate (decision 470) gets a feature vector built from DB data per the feature contract (absent blocks dropped — the tower's dropout training anticipates this; genome zero-imputed) and runs §8 stages 9–10 only. 19 such titles arrive with the initial bundle; thin ones (2 lack keywords, 3 lack any DNA row) are still placed, badged, and parked as acquisition jobs for M5 enrichment | bundle import + nightly sweep | seconds |
 | DNA projection for a new title (per-title incremental — new code; the corpus `dna project` is deliberately wholesale) | acquisition | <1 s |
