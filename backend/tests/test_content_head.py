@@ -247,3 +247,23 @@ def test_match_is_unmoved_by_one_member_having_a_louder_fit():
     second = content.match(a, quiet, lay).shared
     assert [k for k, _p, _q in first] == [k for k, _p, _q in second]
     assert first[0][2] == pytest.approx(second[0][2], abs=1e-9)
+
+
+def test_as_dict_is_the_whole_reader_surface():
+    """The nightly log and §6.7's rail read a fit through `as_dict` and never its attributes.
+
+    This exists because they did not: decision 571 removed `Fit.era` and the log line that reached
+    past `as_dict` for it crashed the fold-in on production, where no fixture reaches the eight
+    labels the weight gate needs and so no test walked that branch.
+    """
+    fit = content.Fit(
+        w=np.zeros(4), weight=0.4, lam=3.0, cv_rho=0.93, base_rho=0.88, con_sd=1.0, con_mean=0.0,
+        digest="abc", label_count=120, used=120, dropped=0, folds=5,
+    )
+    out = fit.as_dict()
+    assert set(out) == {
+        "weight", "lambda", "cv_rho", "base_rho", "gain", "con_sd", "digest",
+        "label_count", "used", "dropped", "folds",
+    }
+    assert out["gain"] == pytest.approx(0.05)
+    assert f"{out}"  # the log formats it, so it has to render

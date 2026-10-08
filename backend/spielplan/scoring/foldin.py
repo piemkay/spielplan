@@ -401,11 +401,9 @@ async def refit_user(
         )
 
     if head is not None and head.weight > 0.0:
-        log.info(
-            "user %s/%s: content head carries %.1f of the score, held-out ρ %.3f against %.3f "
-            "(era centre %s)",
-            user_id, kind, head.weight, head.cv_rho, head.base_rho, head.era.as_dict()["centre"],
-        )
+        # `as_dict` and not the fields: it is the projection the rail and the tests already read, so
+        # a field this head stops carrying breaks loudly there rather than only here (decision 571).
+        log.info("user %s/%s: content head %s", user_id, kind, head.as_dict())
 
     # One transaction: a committed fit with no scores reads as fresh and serves empty shelves.
     async with conn.transaction():
